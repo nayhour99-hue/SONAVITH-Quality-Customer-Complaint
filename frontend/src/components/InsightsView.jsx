@@ -28,6 +28,11 @@ const STATUS_STYLES = {
     dot: '#f87171',
     text: '#991b1b',
   },
+  'Closed': {
+    fill: '#64748b', // Slate Gray
+    dot: '#94a3b8',
+    text: '#334155',
+  },
 };
 
 const DEFECT_COLOR_PALETTE = {
@@ -529,24 +534,41 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     // Chart SVG Generators for High-Resolution Vector Print / PDF Output
     // -------------------------------------------------------------------------
 
-    // 1. Status Breakdown Bars Chart (HTML/SVG)
-    const statusBarsHtml = statusBreakdown.map((item) => {
-      const styleConfig = STATUS_STYLES[item.status] || { fill: '#64748b', dot: '#94a3b8' };
-      const pct = ((item.count / (totalComplaints || 1)) * 100).toFixed(1);
-      const barWidth = Math.max((item.count / maxStatus) * 100, item.count > 0 ? 3 : 0);
+    // 1. Status Breakdown Bars Chart (SVG Vector Chart)
+    const generateStatusBarsSvg = () => {
+      if (!statusBreakdown || statusBreakdown.length === 0) return '';
+      const rowHeight = 24;
+      const totalH = statusBreakdown.length * rowHeight + 8;
+      const trackX = 145;
+      const trackW = 390;
+      const maxVal = maxStatus || 1;
+
+      const rows = statusBreakdown.map((item, idx) => {
+        const styleConfig = STATUS_STYLES[item.status] || { fill: '#64748b', dot: '#94a3b8' };
+        const pct = ((item.count / (totalComplaints || 1)) * 100).toFixed(1);
+        const ratio = item.count / maxVal;
+        const barW = Math.max(ratio * trackW, item.count > 0 ? 8 : 0);
+        const y = 6 + idx * rowHeight;
+
+        return `
+          <g>
+            <circle cx="10" cy="${y + 6}" r="4" fill="${styleConfig.dot}" />
+            <text x="22" y="${y + 10}" font-size="10.5" font-weight="600" fill="#334155">${esc(item.status)}</text>
+            <rect x="${trackX}" y="${y}" width="${trackW}" height="12" rx="3" fill="#f1f5f9" />
+            <rect x="${trackX}" y="${y}" width="${barW}" height="12" rx="3" fill="${styleConfig.fill}" />
+            <text x="${trackX + trackW + 12}" y="${y + 10}" font-size="10.5" font-weight="700" fill="#0f172a">
+              ${item.count} <tspan font-size="9" font-weight="500" fill="#64748b">(${pct}%)</tspan>
+            </text>
+          </g>
+        `;
+      }).join('');
+
       return `
-        <div style="display:flex;align-items:center;font-size:10.5px;margin-bottom:6px;">
-          <span style="width:130px;color:#334155;font-weight:600;display:flex;align-items:center;gap:6px;">
-            <span style="width:8px;height:8px;border-radius:50%;background:${styleConfig.dot};flex-shrink:0;"></span>
-            <span>${esc(item.status)}</span>
-          </span>
-          <div style="flex:1;height:12px;background:#f1f5f9;border-radius:3px;overflow:hidden;margin:0 10px;">
-            <div style="width:${barWidth}%;height:100%;background:${styleConfig.fill};border-radius:3px;"></div>
-          </div>
-          <span style="width:70px;text-align:right;font-weight:700;color:#0f172a;">${item.count} <span style="font-weight:500;color:#64748b;font-size:9.5px;">(${pct}%)</span></span>
-        </div>
+        <svg width="100%" height="${totalH}" viewBox="0 0 620 ${totalH}" style="display:block;margin:4px 0;">
+          ${rows}
+        </svg>
       `;
-    }).join('');
+    };
 
     // 2. Donut Chart Generator
     const generateDonutSvg = (slices, centerTotal, centerLabel) => {
@@ -846,7 +868,12 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   <title>SONAVITH Quality Insights & Analytics Report - ${esc(todayStr)}</title>
   <style>
     @page { size: A4 portrait; margin: 12mm 12mm 14mm 12mm; }
-    * { box-sizing: border-box; }
+    * { 
+      box-sizing: border-box; 
+      -webkit-print-color-adjust: exact !important; 
+      print-color-adjust: exact !important; 
+      color-adjust: exact !important; 
+    }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: #0f172a;
@@ -1087,7 +1114,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     <!-- Visual Status Bars Chart -->
     <div class="chart-box">
       <div style="font-size:10px;font-weight:700;color:#334155;margin-bottom:8px;">Status Breakdown (Workflow Stages Visual Chart)</div>
-      ${statusBarsHtml}
+      ${generateStatusBarsSvg()}
     </div>
 
     <table class="data-table">
