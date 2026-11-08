@@ -329,10 +329,22 @@ export default function App() {
   };
 
   const handleResetData = async () => {
-    if (window.confirm('Reset all complaints to the initial reference state?')) {
-      await resetData();
-      showToast('Database reset to initial 6 reference complaints.');
-      await loadData();
+    if (userRole !== 'Admin') {
+      showToast('Action Denied: Only Admin users are authorized to reset demo data.');
+      return;
+    }
+    if (
+      window.confirm(
+        '⚠️ CRITICAL WARNING: You are about to wipe all active complaints and reset the database to initial demo records!\n\nAll newly logged complaints, approvals, exchanges, and disposal records will be permanently lost.\n\nAre you sure you want to proceed?'
+      )
+    ) {
+      try {
+        await resetData();
+        showToast('Database reset to initial demo state.');
+        await loadData();
+      } catch (err) {
+        showToast(err.message || 'Failed to reset data.');
+      }
     }
   };
 

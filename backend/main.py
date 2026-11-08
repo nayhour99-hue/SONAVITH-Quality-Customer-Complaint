@@ -392,7 +392,13 @@ async def upload_file(file: UploadFile = File(...)):
     return {"url": f"/uploads/{safe_filename}", "filename": safe_filename}
 
 @app.post("/api/reset-data")
-def reset_data():
+def reset_data(admin: dict = Depends(get_current_admin)):
+    # Protect live data: allow disabling reset-data in production environment
+    if os.getenv("DISABLE_RESET_DEMO", "false").lower() in ("true", "1", "yes"):
+        raise HTTPException(
+            status_code=403,
+            detail="Reset Demo function is disabled in production to protect live data."
+        )
     conn = database.get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM complaints")

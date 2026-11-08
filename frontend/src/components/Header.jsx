@@ -50,48 +50,68 @@ export default function Header({
   return (
     <header className="brand-header-card">
       <div className="brand-header-body">
-        {/* Reset button in corner for convenience */}
-        <div style={{ position: 'absolute', top: 16, right: 18 }}>
-          <button
-            onClick={onResetData}
-            title="Reset data to initial reference records"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              fontSize: '0.75rem',
-              color: 'var(--color-text-muted)',
-              padding: '4px 8px',
-              borderRadius: 4,
-              border: '1px solid var(--color-border)'
-            }}
-          >
-            <RotateCcw size={13} />
-            <span>Reset Demo</span>
-          </button>
-        </div>
-        {/* Logout button */}
-        {onLogout && (
-          <div style={{ position: 'absolute', top: 16, right: 100 }}>
+        {/* Top-right Action Bar: Admin tools & Logout (properly aligned without overlapping) */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            right: 18,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            zIndex: 10,
+          }}
+        >
+          {/* Reset Demo button: ONLY visible to Admin users to protect live data */}
+          {userRole === 'Admin' && (
+            <button
+              onClick={onResetData}
+              title="Admin Only: Reset database to initial reference demo state (Caution: all newly created records will be wiped)"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontSize: '0.75rem',
+                color: '#b91c1c',
+                background: '#fef2f2',
+                padding: '5px 10px',
+                borderRadius: 6,
+                border: '1px solid #fecaca',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <RotateCcw size={13} color="#b91c1c" />
+              <span>Reset Demo</span>
+            </button>
+          )}
+
+          {/* Logout button */}
+          {onLogout && (
             <button
               onClick={onLogout}
-              title="Log out"
+              title="Log out of current account"
               style={{
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
                 gap: 5,
                 fontSize: '0.75rem',
                 color: 'var(--color-text-muted)',
-                padding: '4px 8px',
-                borderRadius: 4,
-                border: '1px solid var(--color-border)'
+                background: '#ffffff',
+                padding: '5px 10px',
+                borderRadius: 6,
+                border: '1px solid var(--color-border)',
+                fontWeight: 500,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
               }}
             >
               <LogOut size={13} />
               <span>Logout</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
         <div className="brand-top-row">
           <div className="brand-logo-wrap">
             <img
