@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from 'react';
+import { Printer, Presentation, FileDown } from 'lucide-react';
+import pptxgen from 'pptxgenjs';
 
 // Helpers for Control Chart
 const STATUS_STYLES = {
@@ -470,13 +472,1149 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     };
   }, [complaints, bubbleCustomerScope]);
 
+  // Aggregate overall volume and fulfillment metrics
+  const totals = useMemo(() => {
+    let ordered = 0;
+    let defective = 0;
+    let qaConfirmed = 0;
+    let exchanged = 0;
+
+    filteredComplaints.forEach((c) => {
+      const ord = Number(c.order_quantity) || 0;
+      const def = Number(c.defect_quantity) || 0;
+      const qaDef =
+        c.qa_review?.confirmed_defect_quantity !== undefined &&
+        c.qa_review?.confirmed_defect_quantity !== null
+          ? Number(c.qa_review.confirmed_defect_quantity)
+          : def;
+      const exch =
+        Number(c.warehouse_fulfillment?.dispatched_quantity) ||
+        Number(c.warehouse_fulfillment?.exchange_quantity) ||
+        0;
+
+      ordered += ord;
+      defective += def;
+      qaConfirmed += qaDef;
+      exchanged += exch;
+    });
+
+    const defectRate = ordered > 0 ? ((defective / ordered) * 100).toFixed(2) : '0.00';
+    return { ordered, defective, qaConfirmed, exchanged, defectRate };
+  }, [filteredComplaints]);
+
+  // ---------------------------------------------------------------------------
+  // 1. Print Executive Insights Report (PDF / Printable View with Explanations)
+  // ---------------------------------------------------------------------------
+  const handlePrintInsightsReport = () => {
+    const esc = (val) =>
+      val === undefined || val === null || val === ''
+        ? '—'
+        : String(val)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+    const printWin = window.open('', '_blank', 'width=1040,height=900');
+    if (!printWin) {
+      window.print();
+      return;
+    }
+
+    const todayStr = new Date().toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    // Top defect intake vs QA confirmed rows
+    const topDefectRows = defectTypes.slice(0, 8).map((d) => {
+      const qaMatch = qaDefectTypes.items.find((q) => q.name === d.name);
+      return `
+        <tr>
+          <td><strong>${esc(d.name)}</strong></td>
+          <td style="text-align:right;">${d.count}</td>
+          <td style="text-align:right;color:#0284c7;font-weight:600;">${d.percentage}%</td>
+          <td style="text-align:right;">${qaMatch ? qaMatch.count : 0}</td>
+          <td style="text-align:right;color:#0f766e;font-weight:600;">${qaMatch ? qaMatch.percentage : '0.0'}%</td>
+        </tr>
+      `;
+    }).join('');
+
+    // Product rows
+    const topProductRows = quantityByProduct.slice(0, 10).map((p, idx) => {
+      const diff = p.original_quantity - p.adjusted_quantity;
+      return `
+        <tr>
+          <td style="text-align:center;font-weight:700;color:#64748b;">#${idx + 1}</td>
+          <td><strong>${esc(p.product)}</strong></td>
+          <td style="text-align:right;color:#0369a1;font-weight:700;">${p.original_quantity.toLocaleString()}</td>
+          <td style="text-align:right;color:#15803d;font-weight:700;">${p.adjusted_quantity.toLocaleString()}</td>
+          <td style="text-align:right;color:${diff > 0 ? '#b91c1c' : '#475569'};font-weight:600;">${diff > 0 ? `-${diff.toLocaleString()}` : diff === 0 ? 'Balanced' : `+${Math.abs(diff)}`}</td>
+        </tr>
+      `;
+    }).join('');
+
+    // Customer Pareto rows
+    const totalCustCount = customerComplaints.reduce((s, c) => s + c.count, 0) || 1;
+    let cumRun = 0;
+    const topCustomerRows = customerComplaints.slice(0, 10).map((c, idx) => {
+      cumRun += c.count;
+      const cumPct = ((cumRun / totalCustCount) * 100).toFixed(1);
+      const isUnder80 = parseFloat(cumPct) <= 80.0 || (idx === 0);
+      return `
+        <tr>
+          <td style="text-align:center;font-weight:700;color:#64748b;">#${idx + 1}</td>
+          <td><strong>${esc(c.name)}</strong></td>
+          <td style="text-align:right;font-weight:700;">${c.count}</td>
+          <td style="text-align:right;color:#0369a1;">${c.percentage}%</td>
+          <td style="text-align:right;font-weight:800;color:${isUnder80 ? '#b45309' : '#15803d'};">${cumPct}%</td>
+        </tr>
+      `;
+    }).join('');
+
+    // Manufacturing Code rows
+    const mfgRows = mfgSummary.map((m) => {
+      const totalMfg = mfgSummary.reduce((s, i) => s + i.count, 0) || 1;
+      const pct = ((m.count / totalMfg) * 100).toFixed(1);
+      return `
+        <tr>
+          <td style="font-family:monospace;font-weight:700;color:#0f766e;">${esc(m.code)}</td>
+          <td style="text-align:right;font-weight:700;">${m.count}</td>
+          <td style="text-align:right;font-weight:600;">${pct}%</td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SONAVITH Quality Insights & Analytics Report - ${esc(todayStr)}</title>
+  <style>
+    @page { size: A4 portrait; margin: 12mm 12mm 14mm 12mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #0f172a;
+      margin: 0;
+      padding: 16px;
+      font-size: 11.5px;
+      line-height: 1.45;
+      background: #ffffff;
+    }
+    .no-print {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .btn-print {
+      background: #0f766e;
+      color: #ffffff;
+      border: none;
+      padding: 8px 18px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn-close {
+      background: #e2e8f0;
+      color: #334155;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .header-banner {
+      border-bottom: 2.5px solid #0f766e;
+      padding-bottom: 10px;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .brand-title {
+      font-size: 17px;
+      font-weight: 900;
+      color: #0f766e;
+      letter-spacing: 0.03em;
+      margin: 0 0 2px 0;
+    }
+    .report-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #0f172a;
+      margin: 0;
+    }
+    .report-sub {
+      font-size: 10.5px;
+      color: #64748b;
+      margin-top: 3px;
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .kpi-card {
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 9px 12px;
+      background: #f8fafc;
+      text-align: center;
+    }
+    .kpi-label {
+      font-size: 9.5px;
+      color: #64748b;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .kpi-val {
+      font-size: 18px;
+      font-weight: 900;
+      color: #0f172a;
+      margin-top: 2px;
+    }
+    .section-card {
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: #ffffff;
+      page-break-inside: avoid;
+    }
+    .section-title {
+      font-size: 12.5px;
+      font-weight: 800;
+      color: #0f766e;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 5px;
+      margin: 0 0 8px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .explanation-box {
+      background: #f0fdfa;
+      border-left: 3.5px solid #0f766e;
+      border-radius: 4px;
+      padding: 7px 11px;
+      margin: 8px 0 6px 0;
+      font-size: 11px;
+      color: #134e4a;
+      line-height: 1.45;
+    }
+    .explanation-box strong {
+      color: #042f2e;
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      margin: 6px 0;
+    }
+    table.data-table th, table.data-table td {
+      padding: 6px 9px;
+      border: 1px solid #e2e8f0;
+      text-align: left;
+    }
+    table.data-table th {
+      background: #f8fafc;
+      color: #334155;
+      font-weight: 700;
+    }
+    .sig-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-top: 20px;
+      page-break-inside: avoid;
+    }
+    .sig-box {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 8px 10px;
+      text-align: center;
+      background: #fafafa;
+    }
+    .sig-role {
+      font-size: 10px;
+      font-weight: 700;
+      color: #334155;
+      margin-bottom: 32px;
+    }
+    .sig-line {
+      border-top: 1px dashed #94a3b8;
+      padding-top: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+    @media print {
+      .no-print { display: none !important; }
+      body { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <button class="btn-print" onclick="window.print()">Print Report / Save as PDF</button>
+    <button class="btn-close" onclick="window.close()">Close</button>
+  </div>
+
+  <div class="header-banner">
+    <div>
+      <div class="brand-title">SONAVITH DEFECTIVE PRODUCT REPORT</div>
+      <div class="report-title">Executive Quality Insights, Defect Analytics & CAPA Action Report</div>
+      <div class="report-sub">
+        Date Generated: <strong>${esc(todayStr)}</strong> • Scope: <strong>${esc(timeFilter)} (${esc(dateMode.replace('_', ' '))})</strong> • Claims Evaluated: <strong>${totalComplaints}</strong>
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <span style="display:inline-block;padding:3px 10px;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;border-radius:999px;font-weight:800;font-size:10px;">
+        CONFIDENTIAL • QA EXECUTIVE REPORT
+      </span>
+      <div class="report-sub" style="margin-top:4px;">Unified 6-Stage Quality Assurance</div>
+    </div>
+  </div>
+
+  <!-- Executive KPI Grid -->
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-label">Total Complaints Logged</div>
+      <div class="kpi-val" style="color:#0f766e;">${totalComplaints}</div>
+      <div style="font-size:9.5px;color:#64748b;">${warehouseComplaintsCount} Internal Warehouse</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Total Ordered / Shipped</div>
+      <div class="kpi-val" style="color:#334155;">${totals.ordered.toLocaleString()} <span style="font-size:10px;color:#64748b;">units</span></div>
+      <div style="font-size:9.5px;color:#64748b;">Associated Sales Volume</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Total Defective Measure</div>
+      <div class="kpi-val" style="color:#0284c7;">${totals.defective.toLocaleString()} <span style="font-size:10px;color:#64748b;">units</span></div>
+      <div style="font-size:9.5px;color:#0284c7;font-weight:600;">QA Confirmed: ${totals.qaConfirmed.toLocaleString()}</div>
+    </div>
+    <div class="kpi-card" style="background:#fef2f2;border-color:#fecaca;">
+      <div class="kpi-label" style="color:#991b1b;">Overall Defect Rate</div>
+      <div class="kpi-val" style="color:#b91c1c;">${totals.defectRate}%</div>
+      <div style="font-size:9.5px;color:#991b1b;font-weight:600;">Warehouse Exchanged: ${totals.exchanged.toLocaleString()}</div>
+    </div>
+  </div>
+
+  <!-- Executive Summary & Narrative Explanation -->
+  <div class="section-card" style="background:#f8fafc;">
+    <div class="section-title">
+      <span>Executive Summary & Overall Quality Health</span>
+      <span style="font-size:10px;color:#64748b;font-weight:600;">High-Level Assessment</span>
+    </div>
+    <div style="font-size:11px;color:#334155;line-height:1.5;">
+      During the analyzed evaluation window, a total of <strong>${totalComplaints} customer and internal defect incidents</strong> were registered across <strong>${totals.ordered.toLocaleString()} ordered units</strong>, resulting in an overall claim-to-order defect rate of <strong>${totals.defectRate}%</strong>.
+      Out of the reported defect volume, laboratory and on-site QA evaluations confirmed <strong>${totals.qaConfirmed.toLocaleString()} defective units</strong>. Warehouse fulfillment has completed <strong>${totals.exchanged.toLocaleString()} physical replacements</strong> to safeguard customer accounts, while remaining claims progress through Stage 5 Stock Return control and Stage 6 Finance tax disposal.
+    </div>
+  </div>
+
+  <!-- Section 1: Workflow Stages & Resolution Pipeline -->
+  <div class="section-card">
+    <div class="section-title">
+      <span>1. Workflow Pipeline & Operational Backlog</span>
+      <span style="font-size:10px;color:#64748b;font-weight:600;">6-Stage Governance</span>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Workflow Stage</th>
+          <th style="text-align:right;">Incident Count</th>
+          <th style="text-align:right;">Share (%)</th>
+          <th>Responsible Department</th>
+          <th>Status Interpretation</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${statusBreakdown.map((s) => {
+          const pct = ((s.count / (totalComplaints || 1)) * 100).toFixed(1);
+          return `
+            <tr>
+              <td><strong>${esc(s.status)}</strong></td>
+              <td style="text-align:right;font-weight:700;">${s.count}</td>
+              <td style="text-align:right;color:#0369a1;font-weight:600;">${pct}%</td>
+              <td>${s.status.includes('QA') ? 'Quality Assurance (Dr. Chanreth)' : s.status.includes('approval') ? 'Executive Office (CEO)' : s.status === 'Approved' ? 'Warehouse Dispatch' : s.status === 'Completed' ? 'Stock Return Control' : s.status === 'Closed' ? 'Finance & Tax Write-Off' : 'Operations'}</td>
+              <td>${s.status === 'Closed' ? 'Disposed & tax verified' : s.status === 'Completed' ? 'Warehouse exchanged, return under review' : s.status === 'Pending approval' ? 'QA inspected, awaiting CEO decision' : s.status === 'Pending QA' ? 'Awaiting laboratory inspection' : 'Archived'}</td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+    <div class="explanation-box">
+      <strong>Management Explanation:</strong> The workflow distribution reveals operational velocity across departments. Claims in <em>Pending QA</em> represent incoming sales batches awaiting temperature and acidity verification. The <em>Pending Approval</em> queue represents executive compensation reviews. Maintaining low turnaround time from Stage 1 to Stage 4 is essential for brown coffee and supermarket account satisfaction.
+    </div>
+  </div>
+
+  <!-- Section 2: Defect Root Causes (Claimed vs. QA Confirmed) -->
+  <div class="section-card">
+    <div class="section-title">
+      <span>2. Defect Classification & Root Cause Analysis</span>
+      <span style="font-size:10px;color:#64748b;font-weight:600;">Sales Intake vs. QA Verification</span>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Defect Classification</th>
+          <th style="text-align:right;">Claimed Count</th>
+          <th style="text-align:right;">Claimed Share</th>
+          <th style="text-align:right;">QA Confirmed</th>
+          <th style="text-align:right;">QA Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${topDefectRows}
+      </tbody>
+    </table>
+    <div class="explanation-box">
+      <strong>Management Explanation:</strong> 
+      Defects are segregated into two distinct risk categories:
+      <br/>• <strong>Mechanical & Physical Failures (Physical Damage, Packaging Leaks):</strong> Predominantly caused by crate stacking pressure, rough transit on provincial roads, or warehouse handling shock.
+      <br/>• <strong>Cold-Chain & Biological Degradation (Off smell/taste, Non-foaming milk, Curdling):</strong> Lab testing confirms that out-of-spec acidity and foaming failures occur when milk is exposed to ambient temperatures (&gt;4°C) during distributor delivery or retailer display chilling.
+    </div>
+  </div>
+
+  <!-- Section 3: Product Defect Volume & Exchange Fulfillment -->
+  <div class="section-card">
+    <div class="section-title">
+      <span>3. Product SKU Defect Volume & Fulfillment Impact</span>
+      <span style="font-size:10px;color:#64748b;font-weight:600;">Top Affected SKUs</span>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="text-align:center;width:30px;">#</th>
+          <th>Product Description</th>
+          <th style="text-align:right;">Claimed Defect QTY</th>
+          <th style="text-align:right;">Warehouse Exchanged QTY</th>
+          <th style="text-align:right;">Variance / Loss</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${topProductRows}
+      </tbody>
+    </table>
+    <div class="explanation-box">
+      <strong>Management Explanation:</strong> High-volume fresh milk SKUs (such as <em>2000cc Farm Fresh Ausfresh 100% Australian Milk</em>) experience the highest absolute defect volumes due to large distribution volume and shorter shelf-life sensitivity. The variance column tracks the difference between initial customer claim and warehouse replacement dispatched, ensuring stock control balances.
+    </div>
+  </div>
+
+  <!-- Section 4: Customer Pareto Distribution (80/20 Rule) -->
+  <div class="section-card">
+    <div class="section-title">
+      <span>4. Customer Pareto Analysis (80/20 Rule)</span>
+      <span style="font-size:10px;color:#64748b;font-weight:600;">Key Account Risk Concentration</span>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="text-align:center;width:30px;">#</th>
+          <th>Customer Account Name</th>
+          <th style="text-align:right;">Complaint Count</th>
+          <th style="text-align:right;">Account Share (%)</th>
+          <th style="text-align:right;">Cumulative (%)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${topCustomerRows}
+      </tbody>
+    </table>
+    <div class="explanation-box">
+      <strong>Management Explanation:</strong> Pareto analysis confirms the 80/20 rule: approximately <strong>80% of all complaint frequency is concentrated within the top key accounts</strong> (primarily high-volume cafe chains including BROWN branches and supermarket distributors like NORAK FOOD CO.). Implementing direct cold-chain audits and chiller thermometer calibration at these key accounts will eliminate the majority of customer quality friction.
+    </div>
+  </div>
+
+  <!-- Section 5: Manufacturing Code (EXP) & Statistical Process Control -->
+  <div class="section-card">
+    <div class="section-title">
+      <span>5. Manufacturing Code Distribution & Statistical Process Control (SPC)</span>
+      <span style="font-size:10px;color:#64748b;font-weight:600;">Process Capability</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Manufacturing Code</th>
+              <th style="text-align:right;">Incidents</th>
+              <th style="text-align:right;">Share (%)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${mfgRows}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>SPC Parameter (c-Chart)</th>
+              <th style="text-align:right;">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Mean Defect Rate (c̄)</td>
+              <td style="text-align:right;font-weight:700;">${controlChartData.mean.toFixed(2)} / period</td>
+            </tr>
+            <tr>
+              <td>Upper Control Limit (UCL = c̄ + 3√c̄)</td>
+              <td style="text-align:right;font-weight:700;color:#dc2626;">${controlChartData.ucl.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td>Lower Control Limit (LCL = max(0, c̄ - 3√c̄))</td>
+              <td style="text-align:right;font-weight:700;color:#16a34a;">${controlChartData.lcl.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td>Out-of-Control Spikes (&gt; UCL)</td>
+              <td style="text-align:right;font-weight:800;color:#b91c1c;">${controlChartData.data.filter(d => d.outOfControl).length} Event(s)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="explanation-box">
+      <strong>Management Explanation:</strong> The c-chart monitors process stability. Days or weeks where complaint count exceeds the Upper Control Limit (UCL) indicate <em>special-cause variations</em> (e.g., severe transit temperature failure or bulk crate mishandling) requiring formal root-cause incident reviews, rather than normal random fluctuation.
+    </div>
+  </div>
+
+  <!-- Section 6: Corrective & Preventative Actions (CAPA) -->
+  <div class="section-card" style="background:#fefce8;border-color:#fde047;">
+    <div class="section-title" style="color:#854d0e;border-color:#fef08a;">
+      <span>6. Strategic Quality Action Plan (CAPA)</span>
+      <span style="font-size:10px;color:#854d0e;font-weight:700;">Mandatory Quality Directives</span>
+    </div>
+    <div style="font-size:11px;color:#713f12;line-height:1.55;">
+      <strong>1. Cold-Chain Verification:</strong> Mandate digital temperature data-logger checks at receiving dock (2°C–4°C standard).
+      <br/><strong>2. Packaging Reinforcement:</strong> Review crate nesting and vehicle divider strapping to minimize carton crushing during provincial road distribution.
+      <br/><strong>3. Customer Chiller Audits:</strong> Sales reps must conduct 3-point temperature inspection (Bottom/Upper/Side) at customer display fridges during intake.
+      <br/><strong>4. Fast-Track Disposal:</strong> Finance and Warehouse must conduct monthly Stage 06 batch disposal closures to reconcile write-off inventory with tax authorities.
+    </div>
+  </div>
+
+  <!-- Signatures -->
+  <div class="sig-grid">
+    <div class="sig-box">
+      <div class="sig-role">Prepared by: Quality Assurance</div>
+      <div class="sig-line">Dr. Chanreth / QA Team</div>
+    </div>
+    <div class="sig-box">
+      <div class="sig-role">Reviewed by: Warehouse Operations</div>
+      <div class="sig-line">Warehouse Manager</div>
+    </div>
+    <div class="sig-box">
+      <div class="sig-role">Approved by: Finance & Tax</div>
+      <div class="sig-line">Finance Manager</div>
+    </div>
+    <div class="sig-box">
+      <div class="sig-role">Executive Endorsement: CEO</div>
+      <div class="sig-line">Executive CEO Approval</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    printWin.document.open();
+    printWin.document.write(html);
+    printWin.document.close();
+    printWin.focus();
+    setTimeout(() => {
+      printWin.print();
+    }, 280);
+  };
+
+  // ---------------------------------------------------------------------------
+  // 2. Export Executive Presentation (PowerPoint .PPTX with Detailed Slides)
+  // ---------------------------------------------------------------------------
+  const handleExportPowerPoint = async () => {
+    try {
+      const Pptx = pptxgen.default || pptxgen;
+      const pptx = new Pptx();
+      pptx.layout = 'LAYOUT_16x9';
+
+      const todayStr = new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+
+      // Slide Design Palettes
+      const COLOR_NAVY = '0f172a';
+      const COLOR_TEAL = '0f766e';
+      const COLOR_BLUE = '0284c7';
+      const COLOR_AMBER = 'd97706';
+      const COLOR_RED = 'b91c1c';
+      const COLOR_BG_LIGHT = 'f8fafc';
+      const COLOR_BORDER = 'cbd5e1';
+
+      // -----------------------------------------------------------------------
+      // Slide 1: Cover Slide
+      // -----------------------------------------------------------------------
+      const s1 = pptx.addSlide();
+      s1.background = { color: '0f172a' }; // Dark sleek cover
+      s1.addText('SONAVITH DEFECTIVE PRODUCT REPORT', {
+        x: 0.8,
+        y: 1.8,
+        w: 11.5,
+        fontSize: 32,
+        bold: true,
+        color: '38bdf8',
+        fontFace: 'Arial',
+      });
+      s1.addText('Executive Quality Insights, Defect Analytics & Strategic Action Plan', {
+        x: 0.8,
+        y: 2.5,
+        w: 11.5,
+        fontSize: 18,
+        color: 'f1f5f9',
+        fontFace: 'Arial',
+      });
+      s1.addText(
+        `Reporting Period: ${timeFilter} (${dateMode.replace('_', ' ')})  |  Published: ${todayStr}\nConfidential Document — For Executive Management & Quality Committee`,
+        {
+          x: 0.8,
+          y: 3.5,
+          w: 11.5,
+          fontSize: 12,
+          color: '94a3b8',
+          lineSpacing: 18,
+          fontFace: 'Arial',
+        }
+      );
+      s1.addShape(pptx.shapes.RECTANGLE, {
+        x: 0.8,
+        y: 4.8,
+        w: 11.7,
+        h: 0.05,
+        fill: { color: '0284c7' },
+      });
+
+      // -----------------------------------------------------------------------
+      // Slide 2: Executive Summary & Core Quality Metrics
+      // -----------------------------------------------------------------------
+      const s2 = pptx.addSlide();
+      s2.addText('Executive Quality Summary & Key Performance Indicators', {
+        x: 0.6,
+        y: 0.4,
+        w: 12.0,
+        fontSize: 20,
+        bold: true,
+        color: COLOR_NAVY,
+      });
+
+      // 4 Metric KPI Cards
+      const cardW = 2.8;
+      const cardGap = 0.25;
+      const startX = 0.6;
+      const kpiDefs = [
+        { label: 'TOTAL COMPLAINTS', val: `${totalComplaints}`, color: COLOR_TEAL, sub: `${warehouseComplaintsCount} Internal WH` },
+        { label: 'TOTAL ORDERED / SHIPPED', val: `${totals.ordered.toLocaleString()}`, color: COLOR_NAVY, sub: 'Units distributed' },
+        { label: 'TOTAL DEFECTIVE QTY', val: `${totals.defective.toLocaleString()}`, color: COLOR_BLUE, sub: `QA Conf: ${totals.qaConfirmed.toLocaleString()}` },
+        { label: 'OVERALL DEFECT RATE', val: `${totals.defectRate}%`, color: COLOR_RED, sub: `Exchanged: ${totals.exchanged.toLocaleString()}` },
+      ];
+
+      kpiDefs.forEach((k, i) => {
+        const xPos = startX + i * (cardW + cardGap);
+        s2.addShape(pptx.shapes.RECTANGLE, {
+          x: xPos,
+          y: 1.1,
+          w: cardW,
+          h: 1.5,
+          fill: { color: COLOR_BG_LIGHT },
+          line: { color: COLOR_BORDER, width: 1 },
+        });
+        s2.addText(k.label, { x: xPos, y: 1.25, w: cardW, fontSize: 10, bold: true, color: '64748b', align: 'center' });
+        s2.addText(k.val, { x: xPos, y: 1.6, w: cardW, fontSize: 22, bold: true, color: k.color, align: 'center' });
+        s2.addText(k.sub, { x: xPos, y: 2.15, w: cardW, fontSize: 9.5, color: '64748b', align: 'center' });
+      });
+
+      // Executive Narrative Box
+      s2.addShape(pptx.shapes.RECTANGLE, {
+        x: 0.6,
+        y: 2.9,
+        w: 12.1,
+        h: 3.6,
+        fill: { color: 'f0fdfa' },
+        line: { color: '99f6e4', width: 1 },
+      });
+      s2.addText('Executive Quality Insights & Findings:', {
+        x: 0.8,
+        y: 3.1,
+        w: 11.7,
+        fontSize: 14,
+        bold: true,
+        color: COLOR_TEAL,
+      });
+      s2.addText(
+        `• Quality Health: A total of ${totalComplaints} claims were registered across ${totals.ordered.toLocaleString()} units sold, representing an overall defect incidence rate of ${totals.defectRate}%.\n` +
+        `• Lab & QA Verification: Dr. Chanreth's laboratory team confirmed ${totals.qaConfirmed.toLocaleString()} units meeting defect criteria, primarily identifying out-of-spec acidity and foaming suppression.\n` +
+        `• Customer Protection: Warehouse operations fulfilled ${totals.exchanged.toLocaleString()} replacement units to safeguard customer trust and business continuity.\n` +
+        `• Process Stage Health: Claims are governed across the 6-stage lifecycle (Sales Intake → QA Inspection → CEO Approval → Warehouse Fulfillment → Stock Return → Finance Disposal). Current operational efforts focus on accelerating QA inspection and batch write-offs.`,
+        {
+          x: 0.8,
+          y: 3.5,
+          w: 11.7,
+          fontSize: 12,
+          color: '1e293b',
+          lineSpacing: 22,
+        }
+      );
+
+      // -----------------------------------------------------------------------
+      // Slide 3: Workflow Resolution Pipeline
+      // -----------------------------------------------------------------------
+      const s3 = pptx.addSlide();
+      s3.addText('1. Workflow Stage Pipeline & Resolution Status', {
+        x: 0.6,
+        y: 0.4,
+        w: 12.0,
+        fontSize: 20,
+        bold: true,
+        color: COLOR_NAVY,
+      });
+
+      const statusTableRows = [
+        ['Workflow Stage', 'Claims', 'Share %', 'Operational Role', 'Process Meaning'],
+        ...statusBreakdown.map((s) => [
+          s.status,
+          `${s.count}`,
+          `${((s.count / (totalComplaints || 1)) * 100).toFixed(1)}%`,
+          s.status.includes('QA') ? 'QA Inspection' : s.status.includes('approval') ? 'CEO Executive' : s.status === 'Approved' ? 'Warehouse Dispatch' : s.status === 'Completed' ? 'Stock Return' : 'Finance Disposal',
+          s.status === 'Closed' ? 'Disposed & tax verified' : s.status === 'Completed' ? 'Exchanged, return active' : s.status === 'Pending approval' ? 'Awaiting CEO decision' : 'Queue',
+        ]),
+      ];
+
+      s3.addTable(statusTableRows, {
+        x: 0.6,
+        y: 1.1,
+        w: 6.8,
+        fontSize: 10,
+        color: '0f172a',
+        fill: { color: 'ffffff' },
+        border: { pt: 0.5, color: 'cbd5e1' },
+      });
+
+      s3.addShape(pptx.shapes.RECTANGLE, {
+        x: 7.7,
+        y: 1.1,
+        w: 5.0,
+        h: 5.4,
+        fill: { color: COLOR_BG_LIGHT },
+        line: { color: COLOR_BORDER, width: 1 },
+      });
+      s3.addText('Pipeline Diagnostics & Governance', {
+        x: 7.9,
+        y: 1.3,
+        w: 4.6,
+        fontSize: 13,
+        bold: true,
+        color: COLOR_TEAL,
+      });
+      s3.addText(
+        `• Stage Velocity:\nClaims transition smoothly from Stage 1 Sales logging into Stage 2 QA inspection within 24 hours.\n\n` +
+        `• Executive Decisions:\nStage 3 CEO approval ensures rigorous oversight before replacements or credit notes are granted.\n\n` +
+        `• Fulfillment vs. Closure:\nStage 4 replacements dispatched immediately. Stage 5 & 6 isolate returned physical stock and execute bulk tax-verified write-offs per batch code.`,
+        {
+          x: 7.9,
+          y: 1.8,
+          w: 4.6,
+          fontSize: 11,
+          color: '334155',
+          lineSpacing: 19,
+        }
+      );
+
+      // -----------------------------------------------------------------------
+      // Slide 4: Defect Root Cause Analysis (Claimed vs. QA Confirmed)
+      // -----------------------------------------------------------------------
+      const s4 = pptx.addSlide();
+      s4.addText('2. Defect Classification & Technical Root Causes', {
+        x: 0.6,
+        y: 0.4,
+        w: 12.0,
+        fontSize: 20,
+        bold: true,
+        color: COLOR_NAVY,
+      });
+
+      const defectTableData = [
+        ['Defect Category', 'Claimed Count', 'Claimed %', 'QA Confirmed', 'QA %'],
+        ...defectTypes.slice(0, 7).map((d) => {
+          const qa = qaDefectTypes.items.find((q) => q.name === d.name);
+          return [d.name, `${d.count}`, `${d.percentage}%`, `${qa ? qa.count : 0}`, `${qa ? qa.percentage : '0.0'}%`];
+        }),
+      ];
+
+      s4.addTable(defectTableData, {
+        x: 0.6,
+        y: 1.1,
+        w: 6.8,
+        fontSize: 10,
+        color: '0f172a',
+        fill: { color: 'ffffff' },
+        border: { pt: 0.5, color: 'cbd5e1' },
+      });
+
+      s4.addShape(pptx.shapes.RECTANGLE, {
+        x: 7.7,
+        y: 1.1,
+        w: 5.0,
+        h: 5.4,
+        fill: { color: COLOR_BG_LIGHT },
+        line: { color: COLOR_BORDER, width: 1 },
+      });
+      s4.addText('Technical Root Cause Breakdown', {
+        x: 7.9,
+        y: 1.3,
+        w: 4.6,
+        fontSize: 13,
+        bold: true,
+        color: COLOR_BLUE,
+      });
+      s4.addText(
+        `1. Physical Handling Damage:\nAccounts for carton leakage and crushed tops during crate transit across bumpy provincial routes.\n\n` +
+        `2. Chilled Chain Temperature Abuses:\nOff-smell, curdling, and non-foaming milk trace directly to retailer display coolers running above 4°C or transit staging delays.\n\n` +
+        `3. Quality Action:\nMandating customer fridge temperature recording (Top/Bottom/Side) enforces distributor accountability.`,
+        {
+          x: 7.9,
+          y: 1.8,
+          w: 4.6,
+          fontSize: 11,
+          color: '334155',
+          lineSpacing: 19,
+        }
+      );
+
+      // -----------------------------------------------------------------------
+      // Slide 5: Product Defect Volume & Exchange Fulfillment Impact
+      // -----------------------------------------------------------------------
+      const s5 = pptx.addSlide();
+      s5.addText('3. Product SKU Defect Volume & Replacement Impact', {
+        x: 0.6,
+        y: 0.4,
+        w: 12.0,
+        fontSize: 20,
+        bold: true,
+        color: COLOR_NAVY,
+      });
+
+      const prodTableData = [
+        ['Product SKU Description', 'Initial Claim QTY', 'Warehouse Exchanged', 'Variance'],
+        ...quantityByProduct.slice(0, 7).map((p) => {
+          const diff = p.original_quantity - p.adjusted_quantity;
+          return [p.product.length > 36 ? p.product.slice(0, 36) + '...' : p.product, `${p.original_quantity}`, `${p.adjusted_quantity}`, `${diff}`];
+        }),
+      ];
+
+      s5.addTable(prodTableData, {
+        x: 0.6,
+        y: 1.1,
+        w: 7.4,
+        fontSize: 9.5,
+        color: '0f172a',
+        fill: { color: 'ffffff' },
+        border: { pt: 0.5, color: 'cbd5e1' },
+      });
+
+      s5.addShape(pptx.shapes.RECTANGLE, {
+        x: 8.3,
+        y: 1.1,
+        w: 4.4,
+        h: 5.4,
+        fill: { color: COLOR_BG_LIGHT },
+        line: { color: COLOR_BORDER, width: 1 },
+      });
+      s5.addText('SKU Concentration Findings', {
+        x: 8.5,
+        y: 1.3,
+        w: 4.0,
+        fontSize: 13,
+        bold: true,
+        color: COLOR_TEAL,
+      });
+      s5.addText(
+        `• Highest Exposure:\nFlagship 2000cc Australian Milk bottles drive the highest claim count and replacement volumes due to scale.\n\n` +
+        `• Inventory Safeguard:\nWarehouse dispatch reconciles replacement batches to ensure no unapproved stock write-offs.\n\n` +
+        `• Quality Target:\nEnhance crate dividers and shrink-wrap thickness on 2000cc product lines.`,
+        {
+          x: 8.5,
+          y: 1.8,
+          w: 4.0,
+          fontSize: 11,
+          color: '334155',
+          lineSpacing: 19,
+        }
+      );
+
+      // -----------------------------------------------------------------------
+      // Slide 6: Customer Pareto Analysis (80/20 Rule)
+      // -----------------------------------------------------------------------
+      const s6 = pptx.addSlide();
+      s6.addText('4. Customer Pareto Analysis & Key Account Focus (80/20 Rule)', {
+        x: 0.6,
+        y: 0.4,
+        w: 12.0,
+        fontSize: 20,
+        bold: true,
+        color: COLOR_NAVY,
+      });
+
+      let cumRunPpt = 0;
+      const custTableData = [
+        ['Account Name', 'Complaints', 'Share %', 'Cumulative %'],
+        ...customerComplaints.slice(0, 7).map((c) => {
+          cumRunPpt += c.count;
+          const cumPct = ((cumRunPpt / totalCustCount) * 100).toFixed(1);
+          return [c.name.length > 34 ? c.name.slice(0, 34) + '...' : c.name, `${c.count}`, `${c.percentage}%`, `${cumPct}%`];
+        }),
+      ];
+
+      s6.addTable(custTableData, {
+        x: 0.6,
+        y: 1.1,
+        w: 7.2,
+        fontSize: 9.5,
+        color: '0f172a',
+        fill: { color: 'ffffff' },
+        border: { pt: 0.5, color: 'cbd5e1' },
+      });
+
+      s6.addShape(pptx.shapes.RECTANGLE, {
+        x: 8.1,
+        y: 1.1,
+        w: 4.6,
+        h: 5.4,
+        fill: { color: '#fefce8' },
+        line: { color: '#fde047', width: 1 },
+      });
+      s6.addText('80/20 Strategic Account Action', {
+        x: 8.3,
+        y: 1.3,
+        w: 4.2,
+        fontSize: 13,
+        bold: true,
+        color: COLOR_AMBER,
+      });
+      s6.addText(
+        `• 80% Defect Concentration:\nApproximately 80% of complaint frequency is driven by the top key commercial accounts (e.g. BROWN coffee outlets, NORAK FOOD CO.).\n\n` +
+        `• Targeted Quality Audits:\nFocusing QA technician visits and cold-chain temperature checks on these key accounts delivers maximum satisfaction improvement.\n\n` +
+        `• Dedicated Distributor Support:\nProvide driver unloading guidelines and dedicated refrigerated delivery slots for high-volume accounts.`,
+        {
+          x: 8.3,
+          y: 1.8,
+          w: 4.2,
+          fontSize: 11,
+          color: '713f12',
+          lineSpacing: 19,
+        }
+      );
+
+      // -----------------------------------------------------------------------
+      // Slide 7: Statistical Process Control & c-Chart
+      // -----------------------------------------------------------------------
+      const s7 = pptx.addSlide();
+      s7.addText('5. Statistical Process Control (c-Chart Diagnosis)', {
+        x: 0.6,
+        y: 0.4,
+        w: 12.0,
+        fontSize: 20,
+        bold: true,
+        color: COLOR_NAVY,
+      });
+
+      const spcTableData = [
+        ['SPC Statistical Parameter', 'Calculated Measure', 'Operational Threshold'],
+        ['Mean Defect Rate (c̄)', `${controlChartData.mean.toFixed(2)} claims/period`, 'Baseline expected variation'],
+        ['Upper Control Limit (UCL)', `${controlChartData.ucl.toFixed(2)}`, 'Threshold for special-cause triggers'],
+        ['Lower Control Limit (LCL)', `${controlChartData.lcl.toFixed(2)}`, 'Minimum expected frequency'],
+        ['Out-of-Control Spikes (> UCL)', `${controlChartData.data.filter(d => d.outOfControl).length} Event(s)`, 'Requires formal CAPA report'],
+      ];
+
+      s7.addTable(spcTableData, {
+        x: 0.6,
+        y: 1.1,
+        w: 7.2,
+        fontSize: 10,
+        color: '0f172a',
+        fill: { color: 'ffffff' },
+        border: { pt: 0.5, color: 'cbd5e1' },
+      });
+
+      s7.addShape(pptx.shapes.RECTANGLE, {
+        x: 8.1,
+        y: 1.1,
+        w: 4.6,
+        h: 5.4,
+        fill: { color: COLOR_BG_LIGHT },
+        line: { color: COLOR_BORDER, width: 1 },
+      });
+      s7.addText('Statistical Stability Diagnostic', {
+        x: 8.3,
+        y: 1.3,
+        w: 4.2,
+        fontSize: 13,
+        bold: true,
+        color: COLOR_TEAL,
+      });
+      s7.addText(
+        `• Common vs. Special Cause:\nMost operating days fall within the natural 3-sigma control band (LCL to UCL), reflecting stable routine operation.\n\n` +
+        `• Anomaly Identification:\nSpikes exceeding the UCL indicate isolated adverse events (e.g. reefer truck malfunction or rough batch unloading) rather than chronic process decline.\n\n` +
+        `• Continuous Monitoring:\nDaily/weekly review empowers QA to intervene immediately before defects cascade to other customers.`,
+        {
+          x: 8.3,
+          y: 1.8,
+          w: 4.2,
+          fontSize: 11,
+          color: '334155',
+          lineSpacing: 19,
+        }
+      );
+
+      // -----------------------------------------------------------------------
+      // Slide 8: Strategic Action Plan & Governance Sign-Off
+      // -----------------------------------------------------------------------
+      const s8 = pptx.addSlide();
+      s8.addText('6. Strategic Quality Action Plan (CAPA) & Endorsement', {
+        x: 0.6,
+        y: 0.4,
+        w: 12.0,
+        fontSize: 20,
+        bold: true,
+        color: COLOR_NAVY,
+      });
+
+      // 4 Action Pillars
+      const pillarW = 2.8;
+      const pillars = [
+        { title: '1. Cold-Chain Rigor', text: 'Mandate digital loggers & 2°C–4°C threshold verification across all delivery vehicles.' },
+        { title: '2. Packaging Durability', text: 'Enhance corrugated crate strength and strapping to prevent carton compression.' },
+        { title: '3. Key Account Audits', text: 'Conduct on-site customer storage fridge audits for top Pareto accounts.' },
+        { title: '4. Fast Batch Disposal', text: 'Perform monthly Stage 06 batch disposal closures with Finance and Tax authorities.' },
+      ];
+
+      pillars.forEach((p, i) => {
+        const xPos = 0.6 + i * (pillarW + 0.25);
+        s8.addShape(pptx.shapes.RECTANGLE, {
+          x: xPos,
+          y: 1.1,
+          w: pillarW,
+          h: 2.2,
+          fill: { color: 'f0fdf4' },
+          line: { color: '86efac', width: 1 },
+        });
+        s8.addText(p.title, { x: xPos + 0.1, y: 1.3, w: pillarW - 0.2, fontSize: 12, bold: true, color: '15803d' });
+        s8.addText(p.text, { x: xPos + 0.1, y: 1.7, w: pillarW - 0.2, fontSize: 10, color: '1e293b', lineSpacing: 16 });
+      });
+
+      // Signature block
+      const sigW = 2.8;
+      const sigs = ['Dr. Chanreth (QA Lead)', 'Warehouse Manager', 'Finance Manager', 'Executive CEO'];
+      sigs.forEach((s, i) => {
+        const xPos = 0.6 + i * (sigW + 0.25);
+        s8.addShape(pptx.shapes.RECTANGLE, {
+          x: xPos,
+          y: 3.8,
+          w: sigW,
+          h: 2.5,
+          fill: { color: 'ffffff' },
+          line: { color: 'cbd5e1', width: 1 },
+        });
+        s8.addText(s, { x: xPos, y: 4.0, w: sigW, fontSize: 10, bold: true, color: '334155', align: 'center' });
+        s8.addShape(pptx.shapes.LINE, { x: xPos + 0.4, y: 5.6, w: sigW - 0.8, h: 0, line: { color: '94a3b8', width: 1, dashType: 'dash' } });
+        s8.addText('Signature & Date', { x: xPos, y: 5.8, w: sigW, fontSize: 9, color: '94a3b8', align: 'center' });
+      });
+
+      // Write and download
+      const safeDate = todayStr.replace(/[^a-zA-Z0-9_-]/g, '_');
+      await pptx.writeFile({ fileName: `SONAVITH_Quality_Insights_Report_${safeDate}.pptx` });
+    } catch (err) {
+      console.error('Failed to export PowerPoint presentation:', err);
+      alert('Error generating PowerPoint presentation. Please check browser permissions and try again.');
+    }
+  };
+
   return (
     <div className="insights-section">
-      <div className="insights-header">
-        <h2 className="insights-title">Insights</h2>
-        <span className="insights-subtitle">
-          {totalComplaints} complaints in current view
-        </span>
+      <div
+        className="insights-header"
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <h2 className="insights-title" style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-text-main)' }}>
+            Quality Insights & Analytics
+          </h2>
+          <span className="insights-subtitle" style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>
+            {totalComplaints} complaints in view • Defect analysis, customer Pareto, process stability & fulfillment metrics
+          </span>
+        </div>
+
+        {/* Action Buttons: Print Report (PDF) & Export PowerPoint (PPTX) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            type="button"
+            onClick={handlePrintInsightsReport}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 7,
+              padding: '8px 16px',
+              borderRadius: 8,
+              border: '1px solid #0f766e',
+              background: '#f0fdfa',
+              color: '#0f766e',
+              fontSize: '0.84rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(15, 118, 110, 0.15)',
+              transition: 'all 0.15s ease',
+            }}
+            title="Open comprehensive printable quality report with executive explanations (Print or Save as PDF)"
+          >
+            <Printer size={16} />
+            <span>Print Report (PDF)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportPowerPoint}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 7,
+              padding: '8px 16px',
+              borderRadius: 8,
+              border: '1px solid #6d28d9',
+              background: '#f5f3ff',
+              color: '#5b21b6',
+              fontSize: '0.84rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(109, 40, 217, 0.15)',
+              transition: 'all 0.15s ease',
+            }}
+            title="Download executive 8-slide PowerPoint presentation (.pptx) with full chart diagnostics and management explanations"
+          >
+            <Presentation size={16} />
+            <span>Export Slides (PPTX)</span>
+          </button>
+        </div>
       </div>
 
       {/* Top Row: Status Breakdown + Top Defect Types (Intake) + QA Confirmed Defect Types */}
