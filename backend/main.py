@@ -14,6 +14,10 @@ from models import (
     QAReviewRequest,
     CEODecisionRequest,
     WarehouseFulfillRequest,
+    StockReturnRequest,
+    StockReturnQASignOffRequest,
+    DisposalRequest,
+    BatchDisposalRequest,
     Customer,
     Product
 )
@@ -52,37 +56,74 @@ from utils.auth import verify_password, create_access_token
 
 @app.post("/api/auth/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = database.get_user_by_email(form_data.username)
+    user = database.get_user_by_email(form_data.username.strip().lower())
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect email or password")
     if not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(status_code=400, detail="Incorrect email or password")
-    access_token = create_access_token(data={"sub": user["email"], "is_admin": user.get("is_admin", 0)})
-    return {"access_token": access_token, "token_type": "bearer"}
+    user_role = user.get("role") or ("Admin" if user.get("is_admin") else "Sale")
+    formatted_user = database.get_user_by_id(user["id"])
+    perms = formatted_user.get("permissions") if formatted_user else database.get_default_permissions_for_role(user_role)
+    access_token = create_access_token(data={
+        "sub": user["email"],
+        "is_admin": user.get("is_admin", 0),
+        "role": user_role
+    })
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "email": user["email"],
+        "is_admin": user.get("is_admin", 0),
+        "role": user_role,
+        "permissions": perms
+    }
 
-# Stage assignment endpoints
-@app.get("/api/stage/{stage}/assignments")
-def get_stage_assignments_endpoint(stage: int, admin: dict = Depends(get_current_admin)):
-    return database.get_stage_assignments(stage)
-
-@app.put("/api/stage/{stage}/assign")
-def assign_user_to_stage_endpoint(stage: int, payload: dict, admin: dict = Depends(get_current_admin)):
-    user_id = payload.get('user_id')
-    assign = payload.get('assign')
-    if assign:
-        database.assign_user_to_stage(user_id, stage)
-    else:
-        database.remove_user_from_stage(user_id, stage)
-    return {"status": "success", "stage": stage, "user_id": user_id, "assigned": bool(assign)}
-
+# User and Stage Management Endpoints
 @app.get("/api/users")
-def list_users(admin: dict = Depends(get_current_admin)):
+def list_users():
     return database.get_all_users()
 
-@app.put("/api/users/{user_id}/role")
-def set_user_role(user_id: str, is_admin: int, admin: dict = Depends(get_current_admin)):
-    database.update_user_role(user_id, is_admin)
-    return {"status": "success", "user_id": user_id, "is_admin": bool(is_admin)}
+@app.post("/api/users")
+def add_user(payload: dict):
+    email = payload.get("email", "").strip().lower()
+    password = payload.get("password")
+    role = payload.get("role") or "Sale"
+    is_admin = 1 if payload.get("is_admin") or role == "Admin" else 0
+    if not email:
+        raise HTTPException(status_code=400, detail="Google Email is required")
+    if not (email.endswith("@gmail.com") or email.endswith("@googlemail.com")):
+        raise HTTPException(status_code=400, detail="Must be a valid Google email address (@gmail.com)")
+    if not password or len(password.strip()) < 6:
+        raise HTTPException(status_code=400, detail="Password assigned by admin must be at least 6 characters")
+    existing = database.get_user_by_email(email)
+    if existing:
+        raise HTTPException(status_code=400, detail=f"User with Google email '{email}' already exists")
+    user = database.create_user(email=email, password=password.strip(), role=role, is_admin=is_admin)
+    return user
+
+@app.put("/api/users/{user_id}/access")
+def update_user_access_endpoint(user_id: str, payload: dict):
+    role = payload.get("role", "Sale")
+    is_admin = 1 if payload.get("is_admin") or role == "Admin" else 0
+    new_password = payload.get("password")
+    database.update_user_access(user_id, is_admin, role, password=new_password)
+    return {"status": "success", "user_id": user_id, "is_admin": is_admin, "role": role}
+
+@app.put("/api/users/{user_id}/permissions")
+def update_permissions_endpoint(user_id: str, payload: dict):
+    perms = {
+        "can_view": payload.get("can_view", []),
+        "can_edit": payload.get("can_edit", [])
+    }
+    updated = database.update_user_permissions(user_id, perms)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "success", "user": updated}
+
+@app.delete("/api/users/{user_id}")
+def delete_user_endpoint(user_id: str):
+    database.delete_user(user_id)
+    return {"status": "success", "message": "User deleted"}
 
 @app.get("/api/complaints")
 def list_complaints(
@@ -201,6 +242,42 @@ def submit_warehouse_fulfillment(complaint_id: str, data: WarehouseFulfillReques
     updated = database.update_warehouse_fulfillment(complaint_id, payload)
     return updated
 
+@app.post("/api/complaints/{complaint_id}/stock-return")
+def submit_stock_return(complaint_id: str, data: StockReturnRequest):
+    complaint = database.get_complaint_by_id(complaint_id)
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+    payload = data.model_dump() if hasattr(data, 'model_dump') else data.dict()
+    updated = database.update_stock_return(complaint_id, payload)
+    return updated
+
+@app.post("/api/complaints/{complaint_id}/stock-return/sign-off")
+def submit_stock_return_qa_signoff(complaint_id: str, data: StockReturnQASignOffRequest):
+    complaint = database.get_complaint_by_id(complaint_id)
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+    payload = data.model_dump() if hasattr(data, 'model_dump') else data.dict()
+    updated = database.update_stock_return_qa_signoff(complaint_id, payload)
+    return updated
+
+@app.post("/api/complaints/batch-disposal")
+def submit_batch_disposal(data: BatchDisposalRequest):
+    payload = data.model_dump() if hasattr(data, 'model_dump') else data.dict()
+    complaint_ids = payload.get("complaint_ids") or []
+    if not complaint_ids:
+        raise HTTPException(status_code=400, detail="No complaints specified for batch disposal")
+    updated_list = database.update_batch_disposal(complaint_ids, payload)
+    return {"status": "success", "updated_count": len(updated_list), "complaints": updated_list}
+
+@app.post("/api/complaints/{complaint_id}/disposal")
+def submit_disposal(complaint_id: str, data: DisposalRequest):
+    complaint = database.get_complaint_by_id(complaint_id)
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+    payload = data.model_dump() if hasattr(data, 'model_dump') else data.dict()
+    updated = database.update_disposal(complaint_id, payload)
+    return updated
+
 @app.get("/api/metrics")
 def get_metrics(
     time_filter: Optional[str] = None,
@@ -262,14 +339,55 @@ def remove_product(product_id: str):
     database.remove_product(product_id)
     return {"status": "success", "message": "Product removed"}
 
+# Defect Types Masterlist Endpoints
+@app.get("/api/defect-types")
+def get_defect_types():
+    return database.get_defect_types()
+
+@app.post("/api/defect-types")
+def add_defect_type(payload: dict):
+    if not payload.get("name"):
+        raise HTTPException(status_code=400, detail="Defect type name is required")
+    created = database.add_defect_type(payload)
+    return created
+
+@app.post("/api/defect-types/bulk")
+def add_defect_types_bulk(data: List[dict]):
+    count = database.add_defect_types_bulk(data)
+    return {"status": "success", "message": f"{count} defect types processed"}
+
+@app.delete("/api/defect-types/{defect_id}")
+def delete_defect_type(defect_id: str):
+    database.delete_defect_type(defect_id)
+    return {"status": "success", "message": "Defect type deleted"}
+
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    ext = os.path.splitext(file.filename)[1] or ".png"
-    safe_filename = f"{uuid.uuid4().hex}{ext}"
+    raw_ext = (os.path.splitext(file.filename or "")[1] or ".png").lower()
+    safe_filename = f"{uuid.uuid4().hex}{raw_ext}"
     file_path = os.path.join(UPLOADS_DIR, safe_filename)
 
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+
+    # Automatically convert HEIC / HEIF / HEC images to browser-compatible JPEG
+    if raw_ext in (".heic", ".heif", ".hec"):
+        try:
+            import pillow_heif
+            from PIL import Image
+            pillow_heif.register_heif_opener()
+            jpg_filename = f"{os.path.splitext(safe_filename)[0]}.jpg"
+            jpg_path = os.path.join(UPLOADS_DIR, jpg_filename)
+            with Image.open(file_path) as img:
+                rgb_img = img.convert("RGB")
+                rgb_img.save(jpg_path, format="JPEG", quality=90)
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+            safe_filename = jpg_filename
+        except Exception as e:
+            print(f"Notice: HEIC conversion fallback for {safe_filename}: {e}")
 
     return {"url": f"/uploads/{safe_filename}", "filename": safe_filename}
 

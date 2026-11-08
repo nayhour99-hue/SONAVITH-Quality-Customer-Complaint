@@ -14,11 +14,18 @@ import {
   Loader2,
   Camera,
   Thermometer,
+  CheckCircle,
+  Video,
+  Play,
+  Building2,
+  MapPin,
 } from 'lucide-react';
 
 export default function ComplaintTable({
   complaints,
   currentTab,
+  userRole = 'Admin',
+  userPermissions = null,
   searchQuery,
   onSearchChange,
   timeFilter,
@@ -34,8 +41,68 @@ export default function ComplaintTable({
   onSelectPhoto,
   onExportExcel,
   isExporting = false,
+  onSignOffStockReturn,
 }) {
   const isSalesTab = currentTab === 'sales';
+  const isWarehouseTab = currentTab === 'warehouse';
+  const isOverviewTab = currentTab === 'overview';
+  const isStockReturnTab = currentTab === 'stock_return';
+  const isDisposalTab = currentTab === 'disposal';
+
+  // Granular Stage Edit & Action Permissions:
+  // Admin has full edit rights. Other users check userPermissions.can_edit, falling back to role rules.
+  const checkCanEdit = (stageKey, fallbackRoleCondition) => {
+    if (userRole === 'Admin') return true;
+    if (userPermissions && Array.isArray(userPermissions.can_edit)) {
+      return userPermissions.can_edit.includes(stageKey);
+    }
+    return fallbackRoleCondition;
+  };
+
+  const canActionInSales = checkCanEdit('sales', userRole === 'Sale');
+  const canActionInQA = currentTab === 'qa' && checkCanEdit('qa', userRole === 'QA');
+  const canActionInCEO = currentTab === 'ceo' && checkCanEdit('ceo', userRole === 'CEO');
+  const canActionInWarehouse = currentTab === 'warehouse' && checkCanEdit('warehouse', userRole === 'Warehouse');
+  
+  // Stage 05 attribute permissions breakdown:
+  // 1. Warehouse Action attribute (+ Fill In Return / Edit Return)
+  const canActionInStockReturn = currentTab === 'stock_return' && (
+    userRole === 'Admin' ||
+    (userPermissions && Array.isArray(userPermissions.can_edit)
+      ? userPermissions.can_edit.includes('stock_return_action') || (userPermissions.can_edit.includes('stock_return') && userRole === 'Warehouse')
+      : userRole === 'Warehouse')
+  );
+
+  // 2. QA Sign-Off attribute (Yes / No toggle)
+  const canQASignOff = currentTab === 'stock_return' && (
+    userRole === 'Admin' ||
+    (userPermissions && Array.isArray(userPermissions.can_edit)
+      ? userPermissions.can_edit.includes('stock_return_signoff') || (userPermissions.can_edit.includes('stock_return') && userRole === 'QA')
+      : userRole === 'QA')
+  );
+
+  const canActionInDisposal = currentTab === 'disposal' && checkCanEdit('disposal', userRole === 'Finance');
+
+  // Complaint intake creation permission:
+  // Allowed on Sales tab if canActionInSales, or on Warehouse tab if canActionInWarehouse
+  const canCreateComplaint =
+    !isOverviewTab &&
+    !isStockReturnTab &&
+    !isDisposalTab &&
+    currentTab !== 'qa' &&
+    currentTab !== 'ceo' &&
+    ((isSalesTab && canActionInSales) ||
+     (isWarehouseTab && canActionInWarehouse));
+
+  // Action column is shown on:
+  // - Overview tab: displays "Details" for Completed/Closed items; "Not Complete" for pending items
+  // - QA, CEO, Warehouse, and Stock Return stages (displays action button or Details read-only button)
+  // - Sales tab and Disposal tab (Stage 06 uses top-level Batch Disposal Action button in banner) have NO per-row action column
+  const showActionColumn =
+    isOverviewTab ||
+    currentTab === 'stock_return' ||
+    (!isSalesTab && (currentTab === 'qa' || currentTab === 'ceo' || currentTab === 'warehouse'));
+
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const exportMenuRef = useRef(null);
 
@@ -91,6 +158,8 @@ export default function ComplaintTable({
         return 'badge-rejected';
       case 'Completed':
         return 'badge-completed';
+      case 'Closed':
+        return 'badge-closed';
       default:
         return 'badge-pending-qa';
     }
@@ -317,15 +386,18 @@ export default function ComplaintTable({
             )}
           </div>
 
-          {/* New Complaint Button (Especially in Sales View) */}
-          <button
-            id="btn-new-complaint"
-            className="btn-primary-action"
-            onClick={onOpenNewComplaint}
-          >
-            <Plus size={16} />
-            <span>+ New complaint</span>
-          </button>
+          {/* New Complaint Button - Functional for Sales team (Stage 01) and Warehouse team */}
+          {canCreateComplaint && (
+            <button
+              id="btn-new-complaint"
+              className="btn-primary-action"
+              onClick={onOpenNewComplaint}
+              title={isWarehouseTab ? "Record new defect found at warehouse (SONAVITH Warehouse)" : "Intake new customer complaint"}
+            >
+              <Plus size={16} />
+              <span>New complaint</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -333,247 +405,1038 @@ export default function ComplaintTable({
       <div className="table-container">
         <table className="complaints-table">
           <thead>
-            <tr>
-              <th>ID</th>
-              <th>Customer</th>
-              <th>Product</th>
-              <th>Code</th>
-              <th
-                className={`sortable-header ${dateMode === 'expiry_date' ? 'header-active-sort' : ''}`}
-                onClick={() => handleHeaderSort('expiry_date')}
-                title="Click to sort by EXP"
-              >
-                <div className="header-sort-content">
-                  <span>EXP</span>
-                  <span className={`sort-indicator ${dateMode === 'expiry_date' ? 'active' : 'inactive'}`}>
-                    {dateMode === 'expiry_date' ? (sortOrder === 'asc' ? '▲' : '▼') : '↕'}
-                  </span>
-                </div>
-              </th>
-              <th>Pro.Time</th>
-              <th>Defect type</th>
-              <th>QTY</th>
-              <th>UOM</th>
-              <th>Photo</th>
-              <th
-                className={`sortable-header ${dateMode === 'shipment_date' ? 'header-active-sort' : ''}`}
-                onClick={() => handleHeaderSort('shipment_date')}
-                title="Click to sort by Shipment Date"
-              >
-                <div className="header-sort-content">
-                  <span>Ship.Date</span>
-                  <span className={`sort-indicator ${dateMode === 'shipment_date' ? 'active' : 'inactive'}`}>
-                    {dateMode === 'shipment_date' ? (sortOrder === 'asc' ? '▲' : '▼') : '↕'}
-                  </span>
-                </div>
-              </th>
-              <th
-                className={`sortable-header ${dateMode === 'complaint_date' ? 'header-active-sort' : ''}`}
-                onClick={() => handleHeaderSort('complaint_date')}
-                title="Click to sort by Com.Date"
-              >
-                <div className="header-sort-content">
-                  <span>Com.Date</span>
-                  <span className={`sort-indicator ${dateMode === 'complaint_date' ? 'active' : 'inactive'}`}>
-                    {dateMode === 'complaint_date' ? (sortOrder === 'asc' ? '▲' : '▼') : '↕'}
-                  </span>
-                </div>
-              </th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
+            {(isStockReturnTab || isDisposalTab) ? (
+              <tr>
+                <th style={{ verticalAlign: 'middle', minWidth: 140 }}>ID</th>
+                {isDisposalTab && (
+                  <>
+                    <th style={{ verticalAlign: 'middle', lineHeight: 1.25, minWidth: 120 }}>
+                      Product ID
+                    </th>
+                    <th style={{ verticalAlign: 'middle', lineHeight: 1.25, minWidth: 140 }}>
+                      Confirmed<br />Defect Type
+                    </th>
+                  </>
+                )}
+                {isStockReturnTab && (
+                  <>
+                    <th style={{ verticalAlign: 'middle', lineHeight: 1.25, minWidth: 120 }}>
+                      Bin Location<br />of Stock Return
+                    </th>
+                    <th style={{ verticalAlign: 'middle', textAlign: 'center', lineHeight: 1.25, minWidth: 90 }}>
+                      Photo<br />Reference
+                    </th>
+                    <th style={{ verticalAlign: 'middle', textAlign: 'right', lineHeight: 1.25, minWidth: 90 }}>
+                      Returned<br />QTY
+                    </th>
+                    <th style={{ verticalAlign: 'middle', textAlign: 'center', lineHeight: 1.25, minWidth: 120 }}>
+                      Status<br />(Write Off/Rework)
+                    </th>
+                  </>
+                )}
+                <th style={{ verticalAlign: 'middle', textAlign: 'right', lineHeight: 1.25, minWidth: 125 }}>
+                  Confirmed Write Off<br />QTY
+                </th>
+                <th style={{ verticalAlign: 'middle', textAlign: 'center', lineHeight: 1.25, minWidth: 120 }}>
+                  Write Off<br />Batch Code
+                </th>
+                <th style={{ verticalAlign: 'middle', textAlign: 'right', lineHeight: 1.25, minWidth: 130 }}>
+                  Confirmed Rework /<br />Saleable QTY
+                </th>
+                {isStockReturnTab && (
+                  <th style={{ verticalAlign: 'middle', textAlign: 'center', lineHeight: 1.25, minWidth: 110 }}>
+                    Signed Off<br />(QA)
+                  </th>
+                )}
+                {isDisposalTab && (
+                  <th style={{ verticalAlign: 'middle', textAlign: 'center', lineHeight: 1.25, minWidth: 125 }}>
+                    Disposal Status<br />& Date
+                  </th>
+                )}
+                {showActionColumn && <th style={{ verticalAlign: 'middle', textAlign: 'center', minWidth: 120 }}>Action</th>}
+              </tr>
+            ) : (
+              <tr>
+                <th>ID</th>
+                <th>Customer</th>
+                <th>Product</th>
+                <th>Code</th>
+                <th
+                  className={`sortable-header ${dateMode === 'expiry_date' ? 'header-active-sort' : ''}`}
+                  onClick={() => handleHeaderSort('expiry_date')}
+                  title="Click to sort by EXP"
+                >
+                  <div className="header-sort-content">
+                    <span>EXP</span>
+                    <span className={`sort-indicator ${dateMode === 'expiry_date' ? 'active' : 'inactive'}`}>
+                      {dateMode === 'expiry_date' ? (sortOrder === 'asc' ? '▲' : '▼') : '↕'}
+                    </span>
+                  </div>
+                </th>
+                <th>Pro.Time</th>
+                <th>Defect type</th>
+                <th>QTY</th>
+                <th>UOM</th>
+                <th>Photo</th>
+                <th style={{ textAlign: 'center', whiteSpace: 'nowrap' }} title="Defect rate percentage of order quantity">
+                  Defect (%)
+                </th>
+                <th
+                  className={`sortable-header ${dateMode === 'complaint_date' ? 'header-active-sort' : ''}`}
+                  onClick={() => handleHeaderSort('complaint_date')}
+                  title="Click to sort by Com.Date"
+                >
+                  <div className="header-sort-content">
+                    <span>Com.Date</span>
+                    <span className={`sort-indicator ${dateMode === 'complaint_date' ? 'active' : 'inactive'}`}>
+                      {dateMode === 'complaint_date' ? (sortOrder === 'asc' ? '▲' : '▼') : '↕'}
+                    </span>
+                  </div>
+                </th>
+                <th>Status</th>
+                {showActionColumn && <th>Action</th>}
+              </tr>
+            )}
           </thead>
           <tbody>
             {sortedComplaints.length === 0 ? (
               <tr>
-                <td colSpan="14" className="empty-state">
+                <td colSpan={(isStockReturnTab || isDisposalTab) ? (showActionColumn ? (isDisposalTab ? 8 : 10) : (isDisposalTab ? 7 : 9)) : (showActionColumn ? 14 : 13)} className="empty-state">
                   No complaints found matching current filters.
                 </td>
               </tr>
             ) : (
-              sortedComplaints.map((item) => (
-                <tr key={item.id}>
-                  <td className="complaint-id-cell">{item.id}</td>
-                  <td>
-                    <div className="customer-name-cell">{item.customer_name}</div>
-                    {renderCustomerLocation(item.customer_location)}
-                  </td>
-                  <td>
-                    <div>{item.product_name}</div>
-                    {(item.price_discount || item.storage_temp || item.so_number || item.order_quantity || item.shipment_date) && (
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
-                        {item.so_number && (
-                          <span
-                            style={{ fontSize: '0.68rem', background: '#f1f5f9', color: '#475569', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}
-                            title={`Sales Order: ${item.so_number}`}
-                          >
-                            SO: {item.so_number}
-                          </span>
+              sortedComplaints.map((item) => {
+                if (isStockReturnTab || isDisposalTab) {
+                  return (
+                    <tr key={item.id}>
+                      <td className="complaint-id-cell" style={{ fontWeight: 700, color: 'var(--color-brand)', verticalAlign: 'middle' }}>
+                        <div>{item.id}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 400, marginTop: 2 }}>
+                          {item.customer_name} • {item.product_name}
+                        </div>
+                      </td>
+
+                      {/* Stage 06 Only: Product ID & Confirmed Defect Type (from Stage 02 QA) */}
+                      {isDisposalTab && (
+                        <>
+                          <td style={{ verticalAlign: 'middle' }}>
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '3px 8px',
+                                borderRadius: 6,
+                                fontSize: '0.76rem',
+                                fontWeight: 700,
+                                fontFamily: 'monospace',
+                                backgroundColor: '#f1f5f9',
+                                color: '#334155',
+                                border: '1px solid #cbd5e1',
+                              }}
+                              title="Product ID from Masterlist"
+                            >
+                              {item.product_id || item.product_short_code || '—'}
+                            </span>
+                          </td>
+                          <td style={{ verticalAlign: 'middle' }}>
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '3px 10px',
+                                borderRadius: 6,
+                                fontSize: '0.76rem',
+                                fontWeight: 600,
+                                backgroundColor: '#eff6ff',
+                                color: '#1d4ed8',
+                                border: '1px solid #bfdbfe',
+                              }}
+                              title="Confirmed Defect Type verified in Stage 02 (QA)"
+                            >
+                              {item.qa_review?.confirmed_defect_type || item.defect_type || '—'}
+                            </span>
+                          </td>
+                        </>
+                      )}
+
+                      {/* 1, 2, 3, 4. Bin Location, Photo Reference, Returned QTY & Status (Stage 05 only) */}
+                      {isStockReturnTab && (
+                        <>
+                          <td style={{ verticalAlign: 'middle' }}>
+                            {item.stock_return?.bin_location || Number(item.stock_return?.virtual_returned_quantity) > 0 ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                {item.stock_return?.bin_location && item.stock_return.bin_location !== 'Virtual Write-Off' && (
+                                  <div style={{ fontWeight: 600, color: '#92400e', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span
+                                      style={{
+                                        display: 'inline-block',
+                                        width: 8,
+                                        height: 8,
+                                        borderRadius: '50%',
+                                        backgroundColor: '#16a34a',
+                                        boxShadow: '0 0 0 2px #bbf7d0',
+                                        flexShrink: 0,
+                                      }}
+                                      title="Warehouse bin assigned and verified"
+                                    ></span>
+                                    <span>{item.stock_return.bin_location}</span>
+                                  </div>
+                                )}
+                                {Number(item.stock_return?.virtual_returned_quantity) > 0 && (
+                                  <div
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      fontSize: '0.70rem',
+                                      fontWeight: 600,
+                                      color: '#7c3aed',
+                                      background: '#faf5ff',
+                                      padding: '1px 6px',
+                                      borderRadius: 4,
+                                      border: '1px solid #ddd6fe',
+                                      width: 'fit-content',
+                                    }}
+                                    title={`Virtual stock written off on-site at province/customer: ${item.stock_return.virtual_location || 'Customer Place'}`}
+                                  >
+                                    <MapPin size={10} />
+                                    <span>Virt: {item.stock_return.virtual_returned_quantity} {item.unit_of_measure} (On-site)</span>
+                                  </div>
+                                )}
+                              </div>
+                            ) : isStockReturnTab && canActionInStockReturn ? (
+                              <button
+                                type="button"
+                                onClick={() => onOpenStageAction(item, 'stock_return')}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#0284c7',
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  fontStyle: 'italic',
+                                  fontSize: '0.8rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                }}
+                                title="Click to input bin location (Warehouse team)"
+                              >
+                                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', backgroundColor: '#cbd5e1', flexShrink: 0 }}></span>
+                                <span>+ Input bin location</span>
+                              </button>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '0.8rem' }}>Pending bin</span>
+                            )}
+                          </td>
+
+                          <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
+                              {(item.disposal?.photo_url || item.stock_return?.photo_url) ? (
+                                <button
+                                  type="button"
+                                  className="photo-thumb-btn"
+                                  onClick={() => {
+                                    const pUrl = item.disposal?.photo_url || item.stock_return.photo_url;
+                                    onSelectPhoto(pUrl, `${item.id} - Stock Return Physical Photo Reference`);
+                                  }}
+                                  title="Click to expand physical photo reference"
+                                  style={{ position: 'relative', display: 'inline-block', verticalAlign: 'middle' }}
+                                >
+                                  <img
+                                    src={(item.disposal?.photo_url || item.stock_return.photo_url).split(',')[0].trim()}
+                                    alt="Return proof"
+                                    className="photo-thumb-img"
+                                    style={{ border: '2px solid #eab308', width: 36, height: 36, borderRadius: 6, objectFit: 'cover' }}
+                                  />
+                                  {(item.disposal?.photo_url || item.stock_return.photo_url).includes(',') && (
+                                    <span style={{
+                                      position: 'absolute', top: -5, right: -5,
+                                      background: '#d97706', color: '#fff',
+                                      fontSize: '0.62rem', fontWeight: 700,
+                                      borderRadius: '50%', width: 16, height: 16,
+                                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                      boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                                    }}>
+                                      {(item.disposal?.photo_url || item.stock_return.photo_url).split(',').filter(Boolean).length}
+                                    </span>
+                                  )}
+                                </button>
+                              ) : null}
+
+                              {/* Virtual write-off video reference button */}
+                              {item.stock_return?.virtual_video_url ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onSelectPhoto(item.stock_return.virtual_video_url, `${item.id} - On-Site Write-Off Video`);
+                                  }}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4,
+                                    padding: '4px 7px',
+                                    borderRadius: 6,
+                                    background: '#ede9fe',
+                                    border: '1px solid #c4b5fd',
+                                    color: '#6d28d9',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                  }}
+                                  title="Play customer on-site destruction video reference"
+                                >
+                                  <Video size={13} color="#7c3aed" />
+                                  <span>Video</span>
+                                </button>
+                              ) : null}
+
+                              {!(item.disposal?.photo_url || item.stock_return?.photo_url) && !item.stock_return?.virtual_video_url && (
+                                isStockReturnTab && canActionInStockReturn ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenStageAction(item, 'stock_return')}
+                                    style={{
+                                      background: '#fef08a',
+                                      color: '#854d0e',
+                                      border: '1px dashed #ca8a04',
+                                      borderRadius: 6,
+                                      padding: '4px 8px',
+                                      fontSize: '0.74rem',
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                    }}
+                                    title="Upload stock return photo or video reference"
+                                  >
+                                    <Camera size={12} />
+                                    <span>+ Upload</span>
+                                  </button>
+                                ) : (
+                                  <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>No media</span>
+                                )
+                              )}
+                            </div>
+                          </td>
+
+                          {/* 3. Returned QTY: Formatted with Total Sum and Physical/Virtual Breakdown */}
+                          <td style={{ textAlign: 'right', fontWeight: 700, color: '#0f172a', verticalAlign: 'middle' }}>
+                            {item.stock_return?.returned_quantity !== undefined && item.stock_return?.returned_quantity !== null ? (
+                              <div>
+                                <div style={{ fontSize: '0.88rem' }}>
+                                  {item.stock_return.returned_quantity} {item.unit_of_measure || ''}
+                                </div>
+                                {(Number(item.stock_return.physical_returned_quantity) > 0 || Number(item.stock_return.virtual_returned_quantity) > 0) && (
+                                  <div style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 500, marginTop: 1 }}>
+                                    {Number(item.stock_return.physical_returned_quantity) > 0 && (
+                                      <span title="Physical stock received at warehouse">📦 {item.stock_return.physical_returned_quantity}</span>
+                                    )}
+                                    {Number(item.stock_return.physical_returned_quantity) > 0 && Number(item.stock_return.virtual_returned_quantity) > 0 && (
+                                      <span> + </span>
+                                    )}
+                                    {Number(item.stock_return.virtual_returned_quantity) > 0 && (
+                                      <span style={{ color: '#6d28d9', fontWeight: 600 }} title="Virtual stock written off at customer place">📍 {item.stock_return.virtual_returned_quantity}</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ) : isStockReturnTab && canActionInStockReturn ? (
+                              <button
+                                type="button"
+                                onClick={() => onOpenStageAction(item, 'stock_return')}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#0284c7',
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  fontSize: '0.78rem',
+                                  fontStyle: 'italic',
+                                }}
+                                title="Input returned quantity"
+                              >
+                                + Input QTY
+                              </button>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontWeight: 400 }}>—</span>
+                            )}
+                          </td>
+
+                          {/* 4. Status (Write Off/Rework): Color-coded pill (#fee2e2 / red for Write Off, #dcfce7 / green for Rework) */}
+                          <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                            {item.stock_return?.disposition_status ? (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  padding: '3px 10px',
+                                  borderRadius: 9999,
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                  backgroundColor: item.stock_return.disposition_status === 'Write Off' ? '#fee2e2' : (item.stock_return.disposition_status === 'Rework' ? '#dcfce7' : '#fef3c7'),
+                                  color: item.stock_return.disposition_status === 'Write Off' ? '#b91c1c' : (item.stock_return.disposition_status === 'Rework' ? '#15803d' : '#92400e'),
+                                  border: `1px solid ${item.stock_return.disposition_status === 'Write Off' ? '#fca5a5' : (item.stock_return.disposition_status === 'Rework' ? '#86efac' : '#fde047')}`,
+                                }}
+                              >
+                                {item.stock_return.disposition_status}
+                              </span>
+                            ) : isStockReturnTab && canActionInStockReturn ? (
+                              <button
+                                type="button"
+                                onClick={() => onOpenStageAction(item, 'stock_return')}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#0284c7',
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  fontSize: '0.78rem',
+                                  fontStyle: 'italic',
+                                }}
+                                title="Select Write Off or Rework status"
+                              >
+                                + Set status
+                              </button>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontSize: '0.75rem', fontStyle: 'italic' }}>Pending</span>
+                            )}
+                          </td>
+                        </>
+                      )}
+
+                      {/* 5. Confirmed Write Off QTY: Bold red metric */}
+                      <td style={{ textAlign: 'right', fontWeight: 800, color: '#b91c1c', fontSize: '0.88rem', verticalAlign: 'middle' }}>
+                        {item.stock_return?.confirmed_write_off_quantity !== undefined && item.stock_return?.confirmed_write_off_quantity !== null ? (
+                          <div>
+                            <div>{item.stock_return.confirmed_write_off_quantity} {item.unit_of_measure || ''}</div>
+                            {Number(item.stock_return.virtual_returned_quantity) > 0 && (
+                              <div style={{ fontSize: '0.67rem', color: '#7c3aed', fontWeight: 600 }}>
+                                incl. {item.stock_return.virtual_returned_quantity} virt
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ color: '#94a3b8', fontWeight: 400 }}>—</span>
                         )}
-                        {item.order_quantity && (
+                      </td>
+
+                      {/* 5b. Write Off Batch Code: Dedicated column for Stage 05 & Stage 06 */}
+                      <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                        {(item.stock_return?.write_off_batch || (isDisposalTab && item.manufacturing_code)) ? (
                           <span
-                            style={{ fontSize: '0.68rem', background: '#e0e7ff', color: '#3730a3', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}
-                            title={`Order QTY: ${item.order_quantity}`}
+                            style={{
+                              display: 'inline-block',
+                              padding: '3px 8px',
+                              borderRadius: 6,
+                              fontSize: '0.76rem',
+                              fontWeight: 700,
+                              fontFamily: 'monospace',
+                              backgroundColor: '#fef2f2',
+                              color: '#991b1b',
+                              border: '1px solid #fecaca',
+                            }}
+                            title="Write Off Batch Code"
                           >
-                            Ord: {item.order_quantity}
+                            {item.stock_return?.write_off_batch || (item.production_batch ? `${item.manufacturing_code}-${item.production_batch}` : item.manufacturing_code)}
                           </span>
-                        )}
-                        {item.shipment_date && (
-                          <span
-                            style={{ fontSize: '0.68rem', background: '#f0fdf4', color: '#166534', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}
-                            title={`Shipment Date: ${item.shipment_date}`}
-                          >
-                            Ship: {item.shipment_date}
-                          </span>
-                        )}
-                        {item.price_discount && (
-                          <span
-                            style={{ fontSize: '0.68rem', background: '#fef3c7', color: '#b45309', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}
-                            title={`Sales Price Discount: ${item.price_discount}`}
-                          >
-                            Disc: {item.price_discount}
-                          </span>
-                        )}
-                        {item.storage_temp && (
-                          <span
-                            style={{ fontSize: '0.68rem', background: '#ecfdf5', color: '#047857', padding: '1px 5px', borderRadius: 4, fontWeight: 500 }}
-                            title={`Sales Intake Storage Temp: ${item.storage_temp}`}
-                          >
-                            {item.storage_temp}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                  <td>{item.manufacturing_code}</td>
-                  <td>{item.product_expiry_date}</td>
-                  <td>{item.production_batch}</td>
-                  <td>{item.defect_type}</td>
-                  <td>
-                    <div style={{ fontWeight: 600 }}>{item.defect_quantity}</div>
-                    {item.qa_review?.confirmed_defect_quantity !== undefined && item.qa_review?.confirmed_defect_quantity !== null && (
-                      <div
-                        style={{
-                          fontSize: '0.70rem',
-                          color: '#0284c7',
-                          fontWeight: 600,
-                          marginTop: 2,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 4,
-                        }}
-                        title={`QA Confirmed: ${item.qa_review.confirmed_defect_quantity} ${item.unit_of_measure} | Storage Temp: ${item.qa_review.customer_storage_temperature || 'N/A'}`}
-                      >
-                        <span>QA: {item.qa_review.confirmed_defect_quantity}</span>
-                        {item.qa_review?.storage_temperature_photo_url && (
+                        ) : isStockReturnTab && canActionInStockReturn ? (
                           <button
                             type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSelectPhoto(item.qa_review.storage_temperature_photo_url, `${item.id} (Storage Temp: ${item.qa_review.customer_storage_temperature || 'Proof'})`);
-                            }}
-                            title={`View Storage Temp Photo Reference (${item.qa_review.customer_storage_temperature || 'Proof'})`}
+                            onClick={() => onTakeAction(item)}
                             style={{
-                              background: '#e0f2fe',
-                              color: '#0284c7',
-                              border: '1px solid #bae6fd',
-                              borderRadius: 4,
-                              padding: '1px 3px',
+                              background: 'none',
+                              border: 'none',
+                              color: '#94a3b8',
                               cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
+                              padding: 0,
+                              fontSize: '0.76rem',
+                              fontStyle: 'italic',
                             }}
+                            title="Click to input Write Off Batch Code"
                           >
-                            <Camera size={11} />
+                            + Input code
                           </button>
+                        ) : (
+                          <span style={{ color: '#94a3b8', fontWeight: 400 }}>—</span>
                         )}
-                      </div>
-                    )}
-                  </td>
-                  <td>{item.unit_of_measure}</td>
-                  <td>
-                    {item.photo_url ? (
-                      <button
-                        className="photo-thumb-btn"
-                        onClick={() => onSelectPhoto(item.photo_url, item.id)}
-                        title={item.photo_url.includes(',') ? "Click to view photos" : "Click to view photo"}
-                        style={{ position: 'relative' }}
-                      >
-                        <img
-                          src={item.photo_url.split(',')[0]}
-                          alt="Defect proof"
-                          className="photo-thumb-img"
-                        />
-                        {item.photo_url.includes(',') && (
-                          <span style={{
-                            position: 'absolute', top: -4, right: -4,
-                            background: 'var(--color-brand)', color: '#fff',
-                            fontSize: '0.6rem', fontWeight: 700,
-                            borderRadius: '50%', width: 14, height: 14,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          }}>
-                            {item.photo_url.split(',').length}
-                          </span>
+                      </td>
+
+                      {/* 6. Confirmed Rework/Saleable QTY: Bold green metric */}
+                      <td style={{ textAlign: 'right', fontWeight: 800, color: '#15803d', fontSize: '0.88rem', verticalAlign: 'middle' }}>
+                        {item.stock_return?.confirmed_rework_quantity !== undefined && item.stock_return?.confirmed_rework_quantity !== null ? (
+                          <span>{item.stock_return.confirmed_rework_quantity} {item.unit_of_measure || ''}</span>
+                        ) : (
+                          <span style={{ color: '#94a3b8', fontWeight: 400 }}>—</span>
                         )}
-                      </button>
-                    ) : (
-                      <span style={{ color: 'var(--color-text-light)', fontSize: '0.75rem' }}>
-                        None
+                      </td>
+
+                      {/* 7. Signed Off (QA): Stage 05 only */}
+                      {isStockReturnTab && (
+                        <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                          {canQASignOff ? (
+                            <div style={{ display: 'inline-flex', borderRadius: 6, border: '1px solid #cbd5e1', overflow: 'hidden', background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                              <button
+                                type="button"
+                                onClick={() => onSignOffStockReturn && onSignOffStockReturn(item.id, 'Yes')}
+                                style={{
+                                  padding: '3px 8px',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                  backgroundColor: item.stock_return?.qa_signed_off === 'Yes' ? '#16a34a' : '#f8fafc',
+                                  color: item.stock_return?.qa_signed_off === 'Yes' ? '#ffffff' : '#64748b',
+                                }}
+                                title="QA Sign Off: Yes (Warehouse action turns Complete)"
+                              >
+                                Yes
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onSignOffStockReturn && onSignOffStockReturn(item.id, 'No')}
+                                style={{
+                                  padding: '3px 8px',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  border: 'none',
+                                  borderLeft: '1px solid #cbd5e1',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                  backgroundColor: item.stock_return?.qa_signed_off === 'No' ? '#dc2626' : '#f8fafc',
+                                  color: item.stock_return?.qa_signed_off === 'No' ? '#ffffff' : '#64748b',
+                                }}
+                                title="QA Sign Off: No (Warehouse action remains open as Edit Return)"
+                              >
+                                No
+                              </button>
+                            </div>
+                          ) : (
+                            item.stock_return?.qa_signed_off === 'Yes' ? (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  padding: '3px 9px',
+                                  borderRadius: 9999,
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  backgroundColor: '#dcfce7',
+                                  color: '#15803d',
+                                  border: '1px solid #86efac',
+                                }}
+                                title={`Signed off by ${item.stock_return?.qa_signed_off_by || 'QA'}`}
+                              >
+                                ✓ Yes
+                              </span>
+                            ) : item.stock_return?.qa_signed_off === 'No' ? (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  padding: '3px 9px',
+                                  borderRadius: 9999,
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  backgroundColor: '#fee2e2',
+                                  color: '#b91c1c',
+                                  border: '1px solid #fca5a5',
+                                }}
+                                title="Not signed off by QA"
+                              >
+                                ✗ No
+                              </span>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontSize: '0.74rem', fontStyle: 'italic' }}>
+                                Pending QA
+                              </span>
+                            )
+                          )}
+                        </td>
+                      )}
+
+                      {/* 8. Stage 06: Disposal Status & Date column */}
+                      {isDisposalTab && (
+                        <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                          {item.status === 'Closed' && item.disposal?.status !== 'Open' ? (
+                            <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  padding: '2px 8px',
+                                  borderRadius: 9999,
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  backgroundColor: '#ede9fe',
+                                  color: '#5b21b6',
+                                  border: '1px solid #c4b5fd'
+                                }}
+                                title="Closed by Finance Manager"
+                              >
+                                <CheckCircle size={12} />
+                                <span>Closed</span>
+                              </span>
+                              {item.disposal?.disposal_date && (
+                                <span style={{ fontSize: '0.72rem', color: '#6d28d9', fontWeight: 600 }}>
+                                  {item.disposal.disposal_date}
+                                </span>
+                              )}
+                            </div>
+                          ) : item.disposal?.status === 'Open' ? (
+                            <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  padding: '3px 9px',
+                                  borderRadius: 9999,
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  backgroundColor: '#fef08a',
+                                  color: '#854d0e',
+                                  border: '1px solid #eab308'
+                                }}
+                                title="Disposal batch open by Finance Manager"
+                              >
+                                Open
+                              </span>
+                              {item.disposal?.disposal_date && (
+                                <span style={{ fontSize: '0.72rem', color: '#92400e', fontWeight: 600 }}>
+                                  {item.disposal.disposal_date}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '3px 9px',
+                                borderRadius: 9999,
+                                fontSize: '0.74rem',
+                                fontWeight: 600,
+                                backgroundColor: '#fef3c7',
+                                color: '#92400e',
+                                border: '1px solid #fde68a'
+                              }}
+                              title="Stage 05 completed & signed off. Awaiting Finance disposal action"
+                            >
+                              Pending Disposal
+                            </span>
+                          )}
+                        </td>
+                      )}
+
+                      {/* Action column */}
+                      {showActionColumn && (
+                        <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                          {isDisposalTab ? (
+                            canActionInDisposal ? (
+                              item.status === 'Closed' || item.disposal ? (
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
+                                  <button
+                                    type="button"
+                                    className="btn-table-action"
+                                    style={{
+                                      backgroundColor: '#ede9fe',
+                                      color: '#5b21b6',
+                                      border: '1px solid #c4b5fd',
+                                      fontWeight: 600,
+                                      padding: '5px 10px',
+                                      fontSize: '0.78rem'
+                                    }}
+                                    onClick={() => onOpenStageAction(item, 'disposal')}
+                                    title="Edit disposal record & tax count"
+                                  >
+                                    Edit Disposal
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-table-action"
+                                    onClick={() => onOpenStageAction(item, 'view')}
+                                    style={{ padding: '5px 8px', fontSize: '0.75rem' }}
+                                    title="View full timeline"
+                                  >
+                                    Details
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn-table-action btn-table-action-primary"
+                                  style={{
+                                    backgroundColor: '#6d28d9',
+                                    color: '#fff',
+                                    border: 'none',
+                                    fontWeight: 700,
+                                    padding: '6px 14px',
+                                    borderRadius: 6,
+                                    boxShadow: '0 1px 2px rgba(109, 40, 217, 0.25)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 5
+                                  }}
+                                  onClick={() => onOpenStageAction(item, 'disposal')}
+                                  title="Input tax count, disposal date and close complaint"
+                                >
+                                  <span>Disposal Action</span>
+                                </button>
+                              )
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn-table-action"
+                                onClick={() => onOpenStageAction(item, 'view')}
+                                title="View full details"
+                              >
+                                Details
+                              </button>
+                            )
+                          ) : item.stock_return?.qa_signed_off === 'Yes' ? (
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  padding: '5px 12px',
+                                  borderRadius: 6,
+                                  backgroundColor: '#dcfce7',
+                                  color: '#15803d',
+                                  fontWeight: 700,
+                                  fontSize: '0.78rem',
+                                  border: '1px solid #86efac',
+                                }}
+                                title="QA Signed Off: Yes - Return is Complete"
+                              >
+                                <CheckCircle size={13} />
+                                <span>Complete</span>
+                              </span>
+                              <button
+                                type="button"
+                                className="btn-table-action"
+                                onClick={() => onOpenStageAction(item, 'view')}
+                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
+                                title="View details"
+                              >
+                                Details
+                              </button>
+                            </div>
+                          ) : canActionInStockReturn ? (
+                            <button
+                              type="button"
+                              className="btn-table-action btn-table-action-primary"
+                              style={{
+                                backgroundColor: item.stock_return ? '#0f766e' : '#ca8a04',
+                                color: '#fff',
+                                border: 'none',
+                                fontWeight: 600,
+                                padding: '6px 12px',
+                                borderRadius: 6,
+                                boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                              }}
+                              onClick={() => onOpenStageAction(item, 'stock_return')}
+                              title={item.stock_return ? 'Edit Stock Return Information' : 'Input Stock Return Information (Warehouse)'}
+                            >
+                              {item.stock_return ? 'Edit Return' : '+ Fill In Return'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn-table-action"
+                              onClick={() => onOpenStageAction(item, 'view')}
+                              title="View full details"
+                            >
+                              Details
+                            </button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                }
+
+                return (
+                  <tr key={item.id}>
+                    <td className="complaint-id-cell">{item.id}</td>
+                    <td>
+                      <div className="customer-name-cell">{item.customer_name}</div>
+                      {renderCustomerLocation(item.customer_location)}
+                    </td>
+                    <td>
+                      <div>{item.product_name}</div>
+                      {(item.price_discount || item.storage_temp || item.so_number || item.order_quantity || item.shipment_date) && (
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                          {item.so_number && (
+                            <span
+                              style={{ fontSize: '0.68rem', background: '#f1f5f9', color: '#475569', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}
+                              title={`Sales Order: ${item.so_number}`}
+                            >
+                              SO: {item.so_number}
+                            </span>
+                          )}
+                          {item.order_quantity && (
+                            <span
+                              style={{ fontSize: '0.68rem', background: '#e0e7ff', color: '#3730a3', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}
+                              title={`Order QTY: ${item.order_quantity}`}
+                            >
+                              Ord: {item.order_quantity}
+                            </span>
+                          )}
+                          {item.shipment_date && (
+                            <span
+                              style={{ fontSize: '0.68rem', background: '#f0fdf4', color: '#166534', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}
+                              title={`Shipment Date: ${item.shipment_date}`}
+                            >
+                              Ship: {item.shipment_date}
+                            </span>
+                          )}
+                          {item.price_discount && (
+                            <span
+                              style={{ fontSize: '0.68rem', background: '#fef3c7', color: '#b45309', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}
+                              title={`Sales Price Discount: ${item.price_discount}`}
+                            >
+                              Disc: {item.price_discount}
+                            </span>
+                          )}
+                          {item.storage_temp && (
+                            <span
+                              style={{ fontSize: '0.68rem', background: '#ecfdf5', color: '#047857', padding: '1px 5px', borderRadius: 4, fontWeight: 500 }}
+                              title={`Sales Intake Storage Temp: ${item.storage_temp}`}
+                            >
+                              {item.storage_temp}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td>{item.manufacturing_code}</td>
+                    <td>{item.product_expiry_date}</td>
+                    <td>{item.production_batch}</td>
+                    <td>
+                      <div>{item.defect_type}</div>
+                      {item.qa_review?.confirmed_defect_type && (
+                        <div
+                          style={{
+                            fontSize: '0.70rem',
+                            color: '#0284c7',
+                            fontWeight: 600,
+                            marginTop: 2,
+                          }}
+                          title={`QA Confirmed Defect Type: ${item.qa_review.confirmed_defect_type}`}
+                        >
+                          QA: {item.qa_review.confirmed_defect_type}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{item.defect_quantity}</div>
+                      {item.qa_review?.confirmed_defect_quantity !== undefined && item.qa_review?.confirmed_defect_quantity !== null && (
+                        <div
+                          style={{
+                            fontSize: '0.70rem',
+                            color: '#0284c7',
+                            fontWeight: 600,
+                            marginTop: 2,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}
+                          title={`QA Confirmed: ${item.qa_review.confirmed_defect_quantity} ${item.unit_of_measure} | Storage Temp: ${item.qa_review.customer_storage_temperature || 'N/A'}`}
+                        >
+                          <span>QA: {item.qa_review.confirmed_defect_quantity}</span>
+                          {item.qa_review?.storage_temperature_photo_url && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onSelectPhoto(item.qa_review.storage_temperature_photo_url, `${item.id} (Storage Temp: ${item.qa_review.customer_storage_temperature || 'Proof'})`);
+                              }}
+                              title={`View Storage Temp Photo Reference (${item.qa_review.customer_storage_temperature || 'Proof'})`}
+                              style={{
+                                background: '#e0f2fe',
+                                color: '#0284c7',
+                                border: '1px solid #bae6fd',
+                                borderRadius: 4,
+                                padding: '1px 3px',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                              }}
+                            >
+                              <Camera size={11} />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td>{item.unit_of_measure}</td>
+                    <td>
+                      {item.photo_url ? (
+                        <button
+                          className="photo-thumb-btn"
+                          onClick={() => onSelectPhoto(item.photo_url, item.id)}
+                          title={item.photo_url.includes(',') ? "Click to view photos" : "Click to view photo"}
+                          style={{ position: 'relative' }}
+                        >
+                          <img
+                            src={item.photo_url.split(',')[0].trim()}
+                            alt="Defect proof"
+                            className="photo-thumb-img"
+                            onError={(e) => {
+                              const rawPath = item.photo_url.split(',')[0].trim();
+                              if (rawPath.startsWith('/') && !e.currentTarget.dataset.retriedBackend) {
+                                e.currentTarget.dataset.retriedBackend = '1';
+                                e.currentTarget.src = `http://127.0.0.1:8000${rawPath}`;
+                              }
+                            }}
+                          />
+                          {item.photo_url.includes(',') && (
+                            <span style={{
+                              position: 'absolute', top: -4, right: -4,
+                              background: 'var(--color-brand)', color: '#fff',
+                              fontSize: '0.6rem', fontWeight: 700,
+                              borderRadius: '50%', width: 14, height: 14,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>
+                              {item.photo_url.split(',').length}
+                            </span>
+                          )}
+                        </button>
+                      ) : (
+                        <span style={{ color: 'var(--color-text-light)', fontSize: '0.75rem' }}>
+                          None
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                      {(() => {
+                        const defectQty = item.qa_review?.confirmed_defect_quantity !== undefined && item.qa_review?.confirmed_defect_quantity !== null
+                          ? Number(item.qa_review.confirmed_defect_quantity)
+                          : Number(item.defect_quantity);
+                        const orderQty = Number(item.order_quantity);
+
+                        if (orderQty && orderQty > 0 && !isNaN(defectQty)) {
+                          const pct = ((defectQty / orderQty) * 100).toFixed(1);
+                          const numPct = parseFloat(pct);
+                          const isHigh = numPct >= 5.0;
+                          return (
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '2px 8px',
+                                borderRadius: '9999px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                background: isHigh ? '#fee2e2' : '#f1f5f9',
+                                color: isHigh ? '#b91c1c' : '#334155',
+                                border: isHigh ? '1px solid #fecaca' : '1px solid #e2e8f0',
+                                letterSpacing: '0.01em',
+                              }}
+                              title={`Defect: ${defectQty} / Order: ${orderQty} (${pct}%)`}
+                            >
+                              {pct}%
+                            </span>
+                          );
+                        }
+                        return <span style={{ color: '#94a3b8' }}>—</span>;
+                      })()}
+                    </td>
+                    <td>{item.complaint_date}</td>
+                    <td>
+                      <span className={`status-badge ${getStatusBadgeClass(item.status)}`}>
+                        {item.status}
                       </span>
+                    </td>
+                    {showActionColumn && (
+                      <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                        {/* Overview Tab: Detail of the completed/closed (view all stage details 01 to 06), or "Not Complete" for pending */}
+                        {isOverviewTab && (
+                          (item.status === 'Completed' || item.status === 'Closed') ? (
+                            <button
+                              type="button"
+                              className="btn-table-action"
+                              onClick={() => onOpenStageAction(item, 'view')}
+                              title="View complete information across stages 01 to 06"
+                            >
+                              Details
+                            </button>
+                          ) : (
+                            <span
+                              style={{
+                                fontSize: '0.74rem',
+                                color: '#94a3b8',
+                                fontStyle: 'italic',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              Not Complete
+                            </span>
+                          )
+                        )}
+
+                        {/* QA Stage */}
+                        {currentTab === 'qa' && (
+                          canActionInQA && item.status === 'Pending QA' ? (
+                            <button
+                              className="btn-table-action btn-table-action-primary"
+                              onClick={() => onOpenStageAction(item, 'qa')}
+                            >
+                              Inspect QA
+                            </button>
+                          ) : (
+                            <button
+                              className="btn-table-action"
+                              onClick={() => onOpenStageAction(item, 'view')}
+                            >
+                              Details
+                            </button>
+                          )
+                        )}
+
+                        {/* CEO Stage */}
+                        {currentTab === 'ceo' && (
+                          canActionInCEO && item.status === 'Pending approval' ? (
+                            <button
+                              className="btn-table-action btn-table-action-primary"
+                              onClick={() => onOpenStageAction(item, 'ceo')}
+                            >
+                              CEO Review
+                            </button>
+                          ) : (
+                            <button
+                              className="btn-table-action"
+                              onClick={() => onOpenStageAction(item, 'view')}
+                            >
+                              Details
+                            </button>
+                          )
+                        )}
+
+                        {/* Warehouse Stage */}
+                        {currentTab === 'warehouse' && (
+                          canActionInWarehouse && item.status === 'Approved' ? (
+                            <button
+                              className="btn-table-action btn-table-action-primary"
+                              onClick={() => onOpenStageAction(item, 'warehouse')}
+                            >
+                              Fulfill
+                            </button>
+                          ) : (
+                            <button
+                              className="btn-table-action"
+                              onClick={() => onOpenStageAction(item, 'view')}
+                            >
+                              Details
+                            </button>
+                          )
+                        )}
+
+
+                      </td>
                     )}
-                  </td>
-                  <td>{item.shipment_date || '—'}</td>
-                  <td>{item.complaint_date}</td>
-                  <td>
-                    <span className={`status-badge ${getStatusBadgeClass(item.status)}`}>
-                      {item.status}
-                    </span>
-                  </td>
-                  <td>
-                    {/* Stage transition button based on status and view */}
-                    {item.status === 'Pending QA' && (
-                      <button
-                        className="btn-table-action btn-table-action-primary"
-                        onClick={() => onOpenStageAction(item, 'qa')}
-                      >
-                        Inspect QA
-                      </button>
-                    )}
-                    {item.status === 'Pending approval' && (
-                      <button
-                        className="btn-table-action btn-table-action-primary"
-                        onClick={() => onOpenStageAction(item, 'ceo')}
-                      >
-                        CEO Review
-                      </button>
-                    )}
-                    {item.status === 'Approved' && (
-                      <button
-                        className="btn-table-action btn-table-action-primary"
-                        onClick={() => onOpenStageAction(item, 'warehouse')}
-                      >
-                        Fulfill
-                      </button>
-                    )}
-                    {item.status === 'Completed' && (
-                      <button
-                        className="btn-table-action"
-                        onClick={() => onOpenStageAction(item, 'view')}
-                      >
-                        Details
-                      </button>
-                    )}
-                    {item.status === 'Rejected' && (
-                      <button
-                        className="btn-table-action"
-                        onClick={() => onOpenStageAction(item, 'view')}
-                      >
-                        Details
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

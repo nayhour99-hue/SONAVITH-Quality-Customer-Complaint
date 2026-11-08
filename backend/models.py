@@ -97,6 +97,10 @@ class QAReviewRequest(BaseModel):
     def validate_qa_temp(cls, v):
         return auto_format_temp(v)
     confirmed_defect_quantity: Optional[int] = Field(default=None, ge=0, example=7, description="Confirmed defective quantity verified by QA")
+    confirmed_defect_type: Optional[str] = Field(default="", example="Physical damage", description="Defect type confirmed by QA inspection")
+    defect_placement: Optional[str] = Field(default="At Store", example="At Store", description="Placement of defect: At Store or Customer Returned")
+    storage_hygiene: Optional[int] = Field(default=5, ge=1, le=5, example=4, description="Storage hygiene rating from 1-5")
+    improvement_point: Optional[str] = Field(default="Keep going", example="Improve storage temp", description="Point to improvement: Improve storage temp, Improve hygiene, Keep space for airflow, Standard delivery, Keep going")
     batch_status: str = Field(..., example="Confirmed out-of-spec acidity")
     root_cause_notes: str = Field(..., example="Storage temperature fluctuation during distributor transit")
     recommendation: str = Field(..., example="Recommend Exchange") # Recommend Exchange, Recommend Credit Note, Reject
@@ -104,6 +108,7 @@ class QAReviewRequest(BaseModel):
 class CEODecisionRequest(BaseModel):
     reviewer_name: str = Field(..., example="Executive Director")
     decision: str = Field(..., example="Approved") # Approved or Rejected
+    approved_quantity: Optional[int] = Field(default=None, ge=0, example=1, description="Quantity approved by CEO for replacement/credit")
     comments: Optional[str] = Field(default="", example="Approved full batch replacement based on QA confirmed quantity")
 
 class WarehouseFulfillRequest(BaseModel):
@@ -113,6 +118,54 @@ class WarehouseFulfillRequest(BaseModel):
     dispatched_quantity: Optional[int] = Field(default=None, ge=0, example=7, description="Quantity dispatched by warehouse matching QA confirmed defect quantity")
     delivery_notes: Optional[str] = Field(default="", example="Dispatched confirmed units with morning chilled route")
 
+class StockReturnRequest(BaseModel):
+    bin_location: Optional[str] = Field(default="", example="Room 2 - Cold Bin 04", description="Name of room number or actual bin location (for physical warehouse stock)")
+    photo_url: Optional[str] = Field(default="", example="/uploads/sample_return.png", description="Photo reference of physical stock return")
+    returned_quantity: float = Field(..., ge=0, example=1.0, description="Total returned quantity from customer (Physical + Virtual sum)")
+    disposition_status: str = Field(default="Write Off", example="Write Off", description="Status (Write Off/Rework)")
+    confirmed_write_off_quantity: float = Field(default=0.0, ge=0, example=1.0, description="Confirmed Write Off QTY (Physical Write Off + Virtual Site Write Off)")
+    confirmed_rework_quantity: float = Field(default=0.0, ge=0, example=0.0, description="Confirmed Rework/Saleable QTY")
+    write_off_batch: Optional[str] = Field(default="", example="WO-20261106-B01", description="Write Off Batch code / reference")
+    
+    # Two-category breakdown fields:
+    physical_returned_quantity: Optional[float] = Field(default=0.0, ge=0, example=1.0, description="Physical stock returned and received at warehouse")
+    physical_write_off_quantity: Optional[float] = Field(default=0.0, ge=0, example=1.0, description="Physical write off quantity at warehouse")
+    physical_rework_quantity: Optional[float] = Field(default=0.0, ge=0, example=0.0, description="Physical rework / saleable quantity at warehouse")
+    
+    virtual_returned_quantity: Optional[float] = Field(default=0.0, ge=0, example=0.0, description="Virtual stock written off directly at customer site / province")
+    virtual_location: Optional[str] = Field(default="", example="Battambang Province Site", description="Location or province where virtual on-site write off occurred")
+    virtual_video_url: Optional[str] = Field(default="", example="/uploads/writeoff_video.mp4", description="Video or media reference recording of write off at customer place")
+    virtual_notes: Optional[str] = Field(default="", example="Stock destroyed at customer site under video verification")
+    
+    controller_name: Optional[str] = Field(default="", example="Stock Controller")
+    notes: Optional[str] = Field(default="", example="Stock inspected and quarantined")
+    recorded_date: Optional[str] = Field(default="", example="2026-11-04")
+    qa_signed_off: Optional[str] = Field(default="No", example="Yes", description="Yes or No QA sign-off")
+    qa_signed_off_by: Optional[str] = Field(default="", example="Dr. Chanreth")
+    qa_signed_off_date: Optional[str] = Field(default="", example="2026-11-04")
+    qa_signed_off_notes: Optional[str] = Field(default="", example="")
+
+class StockReturnQASignOffRequest(BaseModel):
+    signed_off: str = Field(..., example="Yes", description="Yes or No")
+    qa_name: Optional[str] = Field(default="Dr. Chanreth", example="Dr. Chanreth")
+    notes: Optional[str] = Field(default="", example="QA verified physical return")
+
+class DisposalRequest(BaseModel):
+    disposal_letter_issue_date: Optional[str] = Field(default="", example="2026-11-07", description="Date the disposal letter was issued")
+    finance_manager_name: Optional[str] = Field(default="Finance Manager", example="Finance Manager", description="Finance Manager controlling the disposal")
+    disposal_date: str = Field(..., example="2026-11-07", description="Disposal Date when tax counted stock and stock was cut")
+    tax_officer_name: Optional[str] = Field(default="Tax Authority Representative", example="Tax Officer / Customs Dept", description="Tax authority representative or inspection reference")
+    tax_count_status: Optional[str] = Field(default="Counted & Approved by Tax Authority", example="Counted & Approved by Tax Authority", description="Status of tax stock count verification")
+    disposed_quantity: Optional[float] = Field(default=0.0, ge=0, example=1.0, description="Quantity written off and cut to disposal")
+    disposal_method: Optional[str] = Field(default="Physical Destruction / Dump", example="Physical Destruction / Dump", description="Method of stock disposal")
+    write_off_batch_codes: Optional[str] = Field(default="", example="Batch-01 & Batch-02", description="Write off batch code(s) included in this disposal action")
+    status: Optional[str] = Field(default="Closed", example="Closed", description="Closed or Open status set by Finance Manager")
+    notes: Optional[str] = Field(default="", example="Tax count completed. Written-off stock officially cut to disposal.", description="Disposal and tax minutes notes")
+    photo_url: Optional[str] = Field(default="", example="", description="Disposal destruction / tax counting photo proof")
+
+class BatchDisposalRequest(DisposalRequest):
+    complaint_ids: List[str] = Field(..., description="List of complaint IDs belonging to the selected write-off batch(es)")
+
 class ComplaintResponse(ComplaintBase):
     id: str
     status: str
@@ -120,3 +173,5 @@ class ComplaintResponse(ComplaintBase):
     qa_review: Optional[Dict[str, Any]] = None
     ceo_decision: Optional[Dict[str, Any]] = None
     warehouse_fulfillment: Optional[Dict[str, Any]] = None
+    stock_return: Optional[Dict[str, Any]] = None
+    disposal: Optional[Dict[str, Any]] = None

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Upload, CheckCircle2, Image as ImageIcon, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
-import { uploadPhoto, getCustomers, getProducts } from '../services/api';
+import { uploadPhoto, getCustomers, getProducts, getDefectTypes } from '../services/api';
 
 /** Inline gallery lightbox shown when user clicks on any uploaded thumbnail */
 function PhotoGalleryLightbox({ photos, startIndex, onClose }) {
@@ -163,11 +163,13 @@ const getFutureDaysStr = (days = 7) => {
   return `${year}-${month}-${day}`;
 };
 
-export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) {
-  const [salesRepName, setSalesRepName] = useState('Sophea Chea');
-  const [customerName, setCustomerName] = useState('');
-  const [customerLocation, setCustomerLocation] = useState('');
-  const [customerContact, setCustomerContact] = useState('');
+export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess, currentTab = 'sales', userRole = 'Sale' }) {
+  const isWarehouseMode = currentTab === 'warehouse' || currentTab === 'stock_return' || userRole === 'Warehouse';
+
+  const [salesRepName, setSalesRepName] = useState(isWarehouseMode ? 'Warehouse Team' : 'Sophea Chea');
+  const [customerName, setCustomerName] = useState(isWarehouseMode ? 'SONAVITH Warehouse' : '');
+  const [customerLocation, setCustomerLocation] = useState(isWarehouseMode ? 'No. A49, Street Camko, Sangkat Toul Sangke, Khan Russey Keo, Phnom Penh, Cambodia.' : '');
+  const [customerContact, setCustomerContact] = useState(isWarehouseMode ? 'warehouse-ambient-food-sp-a1@sonavith.com' : '');
   const [complaintDate, setComplaintDate] = useState(getTodayStr());
   const [productName, setProductName] = useState('');
   const [productShortCode, setProductShortCode] = useState('');
@@ -180,7 +182,7 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
   const [priceDiscount, setPriceDiscount] = useState('');
   const [storageTemp, setStorageTemp] = useState('');
   const [shipmentDate, setShipmentDate] = useState('');
-  const [soNumber, setSoNumber] = useState('');
+  const [soNumber, setSoNumber] = useState(isWarehouseMode ? 'WH-INT' : '');
   const [orderQuantity, setOrderQuantity] = useState('');
 
   // Multi-photo state: array of { url, name }
@@ -194,15 +196,60 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
 
   const [dbCustomers, setDbCustomers] = useState([]);
   const [dbProducts, setDbProducts] = useState([]);
+  const [dbDefectTypes, setDbDefectTypes] = useState([]);
+
+  const setWarehouseCustomerValues = (allCustomers = dbCustomers) => {
+    const whCust = allCustomers.find((c) => c.name.toLowerCase() === 'sonavith warehouse') || {
+      id: '6b4e0a60',
+      name: 'SONAVITH Warehouse',
+      location: 'No. A49, Street Camko, Sangkat Toul Sangke, Khan Russey Keo, Phnom Penh, Cambodia.',
+      contact: 'warehouse-ambient-food-sp-a1@sonavith.com',
+    };
+    setCustomerName('SONAVITH Warehouse');
+    setCustomerLocation(whCust.location || 'No. A49, Street Camko, Sangkat Toul Sangke, Khan Russey Keo, Phnom Penh, Cambodia.');
+    setCustomerContact(whCust.contact || 'warehouse-ambient-food-sp-a1@sonavith.com');
+    setSalesRepName('Warehouse Team');
+    if (!soNumber) setSoNumber('WH-INT');
+  };
 
   useEffect(() => {
     if (isOpen) {
-      getCustomers().then(setDbCustomers).catch(console.error);
+      getCustomers().then((data) => {
+        const whCust = data.find((c) => c.name.toLowerCase() === 'sonavith warehouse') || {
+          id: '6b4e0a60',
+          name: 'SONAVITH Warehouse',
+          location: 'No. A49, Street Camko, Sangkat Toul Sangke, Khan Russey Keo, Phnom Penh, Cambodia.',
+          contact: 'warehouse-ambient-food-sp-a1@sonavith.com',
+        };
+
+        if (isWarehouseMode) {
+          // Warehouse Team: strictly exclude other customer info, keep ONLY SONAVITH Warehouse
+          setDbCustomers([whCust]);
+          setCustomerName('SONAVITH Warehouse');
+          setCustomerLocation(whCust.location || 'No. A49, Street Camko, Sangkat Toul Sangke, Khan Russey Keo, Phnom Penh, Cambodia.');
+          setCustomerContact(whCust.contact || 'warehouse-ambient-food-sp-a1@sonavith.com');
+          setSalesRepName('Warehouse Team');
+          setSoNumber('WH-INT');
+        } else {
+          // Sales team: common external customers only
+          const externalCustomers = data.filter((c) => c.name.toLowerCase() !== 'sonavith warehouse');
+          setDbCustomers(externalCustomers);
+          setCustomerName('');
+          setCustomerLocation('');
+          setCustomerContact('');
+          setSalesRepName('Sophea Chea');
+          setSoNumber('');
+        }
+      }).catch(console.error);
+
       getProducts().then(setDbProducts).catch(console.error);
+      getDefectTypes().then(setDbDefectTypes).catch(console.error);
       setComplaintDate(getTodayStr());
       setProductExpiryDate(getFutureDaysStr(7));
+      setPhotos([]);
+      setErrorMsg('');
     }
-  }, [isOpen]);
+  }, [isOpen, isWarehouseMode]);
 
   if (!isOpen) return null;
 
@@ -302,10 +349,10 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
     const formattedStorageTemp = formatTempInput(storageTemp);
 
     const payload = {
-      sales_rep_name: salesRepName,
-      customer_name: customerName,
-      customer_location: customerLocation,
-      customer_contact: customerContact,
+      sales_rep_name: isWarehouseMode ? (salesRepName || 'Warehouse Team') : salesRepName,
+      customer_name: isWarehouseMode ? 'SONAVITH Warehouse' : customerName,
+      customer_location: isWarehouseMode ? (customerLocation || 'No. A49, Street Camko, Sangkat Toul Sangke, Khan Russey Keo, Phnom Penh, Cambodia.') : customerLocation,
+      customer_contact: isWarehouseMode ? (customerContact || 'warehouse-ambient-food-sp-a1@sonavith.com') : customerContact,
       complaint_date: complaintDate,
       product_name: productName,
       product_short_code: productShortCode.trim().toUpperCase(),
@@ -318,7 +365,7 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
       price_discount: formattedDiscount,
       storage_temp: formattedStorageTemp,
       shipment_date: shipmentDate,
-      so_number: soNumber,
+      so_number: isWarehouseMode ? (soNumber || 'WH-INT') : soNumber,
       order_quantity: orderQuantity !== '' ? parseInt(orderQuantity, 10) : null,
       // Store all photo URLs as comma-separated; latest is at end
       photo_url: primaryPhotoUrl,
@@ -355,8 +402,12 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
         >
           <div className="modal-header">
             <div>
-              <h2 className="modal-title">New complaint</h2>
-              <div className="modal-subtitle">Sales entry</div>
+              <h2 className="modal-title">
+                {isWarehouseMode ? 'New Complaint (Warehouse Defect)' : 'New complaint'}
+              </h2>
+              <div className="modal-subtitle">
+                {isWarehouseMode ? 'Stage 04: Warehouse internal defect intake' : 'Stage 01: Sales intake'}
+              </div>
             </div>
             <button className="modal-close-btn" onClick={onClose} aria-label="Close modal">
               <X size={20} />
@@ -378,31 +429,93 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
 
             <div className="form-grid-2col">
               <div>
-                <label className="form-label">Sales rep name</label>
+                <label className="form-label">{isWarehouseMode ? 'Inspector / Reporter name' : 'Sales rep name'}</label>
                 <input type="text" className="form-input" value={salesRepName}
                   onChange={(e) => setSalesRepName(e.target.value)} required />
               </div>
               <div>
-                <label className="form-label">Customer name</label>
-                <input type="text" list="customer-list" className="form-input" placeholder="Type to search or pick a customer"
-                  value={customerName} onChange={(e) => handleCustomerChange(e.target.value)} required />
-                <datalist id="customer-list">
-                  {dbCustomers.map((c, idx) => <option key={idx} value={c.name} />)}
-                </datalist>
+                {isWarehouseMode ? (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <label className="form-label" style={{ marginBottom: 0 }}>Customer name</label>
+                      <span
+                        style={{
+                          fontSize: '0.70rem',
+                          color: '#047857',
+                          background: '#ecfdf5',
+                          border: '1px solid #a7f3d0',
+                          padding: '1px 8px',
+                          borderRadius: 4,
+                          fontWeight: 700,
+                        }}
+                      >
+                        🏢 SONAVITH Warehouse
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value="SONAVITH Warehouse"
+                      readOnly
+                      style={{
+                        backgroundColor: '#f8fafc',
+                        cursor: 'default',
+                        fontWeight: 700,
+                        color: 'var(--color-brand)',
+                        border: '1px solid #cbd5e1',
+                      }}
+                      required
+                    />
+                    <div style={{ fontSize: '0.71rem', color: '#b45309', background: '#fef3c7', padding: '3px 7px', borderRadius: 4, marginTop: 4 }}>
+                      ⚠️ Warehouse internal defect — exclusively assigned to SONAVITH Warehouse.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label className="form-label">Customer name</label>
+                    <input
+                      type="text"
+                      list="customer-list"
+                      className="form-input"
+                      placeholder="Type to search or pick a customer"
+                      value={customerName}
+                      onChange={(e) => handleCustomerChange(e.target.value)}
+                      required
+                    />
+                    <datalist id="customer-list">
+                      {dbCustomers.map((c, idx) => (
+                        <option key={idx} value={c.name} />
+                      ))}
+                    </datalist>
+                  </>
+                )}
               </div>
             </div>
 
             <div className="form-grid-2col">
               <div>
-                <label className="form-label">Customer location</label>
-                <input type="text" className="form-input"
+                <label className="form-label">{isWarehouseMode ? 'Warehouse location' : 'Customer location'}</label>
+                <input
+                  type="text"
+                  className="form-input"
                   placeholder="Address, or paste a Google Maps link"
-                  value={customerLocation} onChange={(e) => setCustomerLocation(e.target.value)} />
+                  value={customerLocation}
+                  onChange={(e) => setCustomerLocation(e.target.value)}
+                  readOnly={isWarehouseMode}
+                  style={isWarehouseMode ? { backgroundColor: '#f8fafc', color: '#334155', cursor: 'default' } : {}}
+                />
               </div>
               <div>
-                <label className="form-label">Customer contact</label>
-                <input type="text" className="form-input" placeholder="Phone or contact person"
-                  value={customerContact} onChange={(e) => setCustomerContact(e.target.value)} />
+                <label className="form-label">{isWarehouseMode ? 'Warehouse contact' : 'Customer contact'}</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Phone or contact person"
+                  value={customerContact}
+                  onChange={(e) => setCustomerContact(e.target.value)}
+                  readOnly={isWarehouseMode}
+                  style={isWarehouseMode ? { backgroundColor: '#f8fafc', color: '#334155', cursor: 'default' } : {}}
+                />
               </div>
             </div>
 
@@ -440,11 +553,19 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
                 <label className="form-label">Defect type</label>
                 <select className="form-select" value={defectType}
                   onChange={(e) => setDefectType(e.target.value)}>
-                  <option value="Physical damage">Physical damage</option>
-                  <option value="Off smell/taste">Off smell/taste</option>
-                  <option value="Packaging leak">Packaging leak</option>
-                  <option value="Curdling">Curdling</option>
-                  <option value="Foreign particle">Foreign particle</option>
+                  {dbDefectTypes.length > 0 ? (
+                    dbDefectTypes.map((dt) => (
+                      <option key={dt.id} value={dt.name}>{dt.name}</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="Physical damage">Physical damage</option>
+                      <option value="Off smell/taste">Off smell/taste</option>
+                      <option value="Packaging leak">Packaging leak</option>
+                      <option value="Curdling">Curdling</option>
+                      <option value="Foreign particle">Foreign particle</option>
+                    </>
+                  )}
                 </select>
               </div>
               <div>
@@ -543,15 +664,17 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
               </div>
             </div>
 
-            <div className="form-group-full">
-              <label className="form-label">
-                Storage Temp
-                <span style={{ color: 'var(--color-text-muted)', fontWeight: 400, marginLeft: 6, fontSize: '0.78rem' }}>(e.g. 2 or 2–6 °C)</span>
-              </label>
+            <div className="form-group-full" style={{ marginBottom: '14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label className="form-label" style={{ margin: 0 }}>
+                  Storage Temp
+                </label>
+                <span style={{ fontSize: '0.74rem', color: '#0f766e', fontWeight: 600 }}>Standard: 2°C – 4°C</span>
+              </div>
               <input
                 type="text"
                 className="form-input"
-                placeholder="e.g. 2, 4, or 2–6 °C"
+                placeholder="e.g. 2°C"
                 value={storageTemp}
                 onChange={(e) => setStorageTemp(e.target.value)}
                 onBlur={() => setStorageTemp((prev) => formatTempInput(prev))}
@@ -572,7 +695,7 @@ export default function NewComplaintModal({ isOpen, onClose, onSubmitSuccess }) 
               <label className="photo-upload-box" style={{ cursor: 'pointer' }}>
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="*/*"
                   multiple
                   onChange={handleFileUpload}
                   style={{ display: 'none' }}

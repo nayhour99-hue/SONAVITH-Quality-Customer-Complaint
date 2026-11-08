@@ -42,7 +42,9 @@ def init_db():
         storage_temp TEXT,
         shipment_date TEXT,
         so_number TEXT,
-        order_quantity INTEGER
+        order_quantity INTEGER,
+        stock_return TEXT,
+        disposal TEXT
     )
     """)
     # Migration: add new columns if missing (no error if already exists)
@@ -52,6 +54,9 @@ def init_db():
         "ALTER TABLE complaints ADD COLUMN shipment_date TEXT",
         "ALTER TABLE complaints ADD COLUMN so_number TEXT",
         "ALTER TABLE complaints ADD COLUMN order_quantity INTEGER",
+        "ALTER TABLE complaints ADD COLUMN stock_return TEXT",
+        "ALTER TABLE complaints ADD COLUMN disposal TEXT",
+        "ALTER TABLE users ADD COLUMN permissions TEXT",
     ]:
         try:
             cursor.execute(col_def)
@@ -64,17 +69,32 @@ def init_db():
         email TEXT UNIQUE NOT NULL,
         hashed_password TEXT NOT NULL,
         is_admin INTEGER NOT NULL DEFAULT 0,
-        role TEXT NOT NULL DEFAULT ''
+        role TEXT NOT NULL DEFAULT '',
+        permissions TEXT
     );
     """)
-    cursor.execute("SELECT COUNT(*) FROM users WHERE email = ?", ("nayhour99@gmail.com",))
-    if cursor.fetchone()[0] == 0:
-        from utils.auth import get_password_hash
-        hashed = get_password_hash("admin123")
-        cursor.execute(
-            "INSERT INTO users (id, email, hashed_password, is_admin) VALUES (?, ?, ?, 1)",
-            ("admin-1", "nayhour99@gmail.com", hashed)
-        )
+    from utils.auth import get_password_hash
+    default_users = [
+        ("admin-1", "nayhour99@gmail.com", "admin123", 1, "Admin"),
+        ("user-sales1", "sales_rep@sonavith.com", "admin123", 0, "Sale"),
+        ("user-sales2", "sales.staff@gmail.com", "admin123", 0, "Sale"),
+        ("user-qa1", "lyneat8899@gmail.com", "admin123", 0, "QA"),
+        ("user-wh1", "thonsreytho97@gmail.com", "admin123", 0, "Warehouse"),
+        ("user-ceo1", "saosokleap8888@gmail.com", "admin123", 0, "CEO"),
+        ("user-finance1", "finance.manager@gmail.com", "admin123", 0, "Finance"),
+    ]
+    for uid, uemail, upass, uadmin, urole in default_users:
+        cursor.execute("SELECT id, role, is_admin FROM users WHERE email = ?", (uemail,))
+        existing_u = cursor.fetchone()
+        if not existing_u:
+            hashed = get_password_hash(upass)
+            cursor.execute(
+                "INSERT INTO users (id, email, hashed_password, is_admin, role) VALUES (?, ?, ?, ?, ?)",
+                (uid, uemail, hashed, uadmin, urole)
+            )
+        else:
+            # Ensure role and is_admin are properly aligned
+            cursor.execute("UPDATE users SET is_admin = ?, role = ? WHERE email = ?", (uadmin, urole, uemail))
 
     # Stage assignments table
     cursor.executescript("""
@@ -94,19 +114,118 @@ def init_db():
         unit_of_measure TEXT
     );
     """)
+
+    # Defect types masterlist table
+    cursor.executescript("""
+    CREATE TABLE IF NOT EXISTS defect_types (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT DEFAULT '',
+        created_at TEXT
+    );
+    """)
+
+    # Seed default defect types if empty
+    cursor.execute("SELECT COUNT(*) FROM defect_types")
+    if cursor.fetchone()[0] == 0:
+        default_defects = [
+            ("DEF-001", "Physical damage", "Broken seal, crushed carton, dented bottle or cap damage", datetime.now().isoformat()),
+            ("DEF-002", "Off smell/taste", "Sour odor, abnormal smell or unpalatable taste deviation", datetime.now().isoformat()),
+            ("DEF-003", "Packaging leak", "Fluid seepage around seams, spout or puncture", datetime.now().isoformat()),
+            ("DEF-004", "Curdling", "Premature separation, coagulation or lumpiness in liquid milk", datetime.now().isoformat()),
+            ("DEF-005", "Foreign particle", "Extraneous matter or discolored flecks inside product", datetime.now().isoformat()),
+            ("DEF-006", "Short expiry / Out of code", "Delivered close to or past expiration date threshold", datetime.now().isoformat()),
+            ("DEF-007", "Temperature abuse / Bloated", "Swollen container due to cold chain interruption", datetime.now().isoformat()),
+            ("DEF-008", "Thick Cream", "The concentrated, high-fat portion of milk that rises to the surface before homogenization and appearance is not smooth as normal liquid (Sandy or powdery).", datetime.now().isoformat()),
+            ("DEF-009", "Cream Separation.", "The process of partitioning whole raw milk into its two primary physical fractions: fat-rich cream and skim milk. Sometimes the yellow fat appears on the bottleneck.", datetime.now().isoformat()),
+            ("DEF-010", "Non-foaming milk", "Milk foam depends on surface-active proteins unfolding to form a flexible, cohesive elastic film around air bubbles.", datetime.now().isoformat()),
+        ]
+        cursor.executemany("INSERT INTO defect_types (id, name, description, created_at) VALUES (?, ?, ?, ?)", default_defects)
     conn.commit()
     conn.close()
 
 # ---------- User helper functions ----------
 
+def get_default_permissions_for_role(role: str) -> Dict[str, List[str]]:
+    defaults = {
+        "Admin": {
+            "can_view": ["overview", "sales", "qa", "ceo", "warehouse", "stock_return", "disposal", "masterlist", "admin"],
+            "can_edit": ["sales", "qa", "ceo", "warehouse", "stock_return_action", "stock_return_signoff", "disposal", "masterlist", "admin"]
+        },
+        "CEO": {
+            "can_view": ["overview", "sales", "qa", "ceo", "warehouse", "stock_return", "disposal", "masterlist"],
+            "can_edit": ["ceo"]
+        },
+        "Sale": {
+            "can_view": ["overview", "sales"],
+            "can_edit": ["sales"]
+        },
+        "QA": {
+            "can_view": ["overview", "qa", "stock_return"],
+            "can_edit": ["qa", "stock_return_signoff"]
+        },
+        "Warehouse": {
+            "can_view": ["overview", "warehouse", "stock_return"],
+            "can_edit": ["warehouse", "stock_return_action"]
+        },
+        "Finance": {
+            "can_view": ["overview", "stock_return", "disposal", "masterlist"],
+            "can_edit": ["disposal"]
+        }
+    }
+    return defaults.get(role, defaults["Sale"])
+
+def format_user_dict(row) -> Optional[Dict[str, Any]]:
+    if not row:
+        return None
+    d = dict(row)
+    # Remove sensitive password hash
+    d.pop("hashed_password", None)
+    role = d.get("role") or ("Admin" if d.get("is_admin") else "Sale")
+    d["role"] = role
+    perms = None
+    if d.get("permissions"):
+        try:
+            perms = json.loads(d["permissions"]) if isinstance(d["permissions"], str) else d["permissions"]
+        except Exception:
+            perms = None
+    if not perms or not isinstance(perms, dict):
+        perms = get_default_permissions_for_role(role)
+    else:
+        # Ensure keys exist
+        if "can_view" not in perms:
+            perms["can_view"] = get_default_permissions_for_role(role)["can_view"]
+        if "can_edit" not in perms:
+            perms["can_edit"] = get_default_permissions_for_role(role)["can_edit"]
+        else:
+            # Upgrade legacy 'stock_return' to specific attributes if needed
+            can_ed = list(perms["can_edit"])
+            if "stock_return" in can_ed and "stock_return_action" not in can_ed and "stock_return_signoff" not in can_ed:
+                if role == "QA":
+                    can_ed.append("stock_return_signoff")
+                elif role == "Warehouse":
+                    can_ed.append("stock_return_action")
+                elif role == "Admin":
+                    can_ed.extend(["stock_return_action", "stock_return_signoff"])
+                perms["can_edit"] = can_ed
+    d["permissions"] = perms
+    return d
+
 def get_all_users() -> List[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
-    # Include role column for UI assignment
-    cursor.execute("SELECT id, email, is_admin, role FROM users")
+    cursor.execute("SELECT id, email, is_admin, role, permissions FROM users")
     rows = cursor.fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [format_user_dict(r) for r in rows if r]
+
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return format_user_dict(row)
 
 def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     conn = get_connection()
@@ -115,6 +234,50 @@ def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+def update_user_permissions(user_id: str, permissions_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET permissions = ? WHERE id = ?", (json.dumps(permissions_data), user_id))
+    conn.commit()
+    conn.close()
+    return get_user_by_id(user_id)
+
+def create_user(email: str, password: str, role: str = "Sale", is_admin: int = 0) -> Dict[str, Any]:
+    import uuid
+    from utils.auth import get_password_hash
+    conn = get_connection()
+    cursor = conn.cursor()
+    user_id = f"user-{uuid.uuid4().hex[:8]}"
+    hashed = get_password_hash(password)
+    perms_json = json.dumps(get_default_permissions_for_role(role))
+    cursor.execute(
+        "INSERT INTO users (id, email, hashed_password, is_admin, role, permissions) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, email.strip().lower(), hashed, is_admin, role, perms_json)
+    )
+    conn.commit()
+    conn.close()
+    return get_user_by_id(user_id)
+
+def update_user_access(user_id: str, is_admin: int, role: str, password: Optional[str] = None) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    if password and password.strip():
+        from utils.auth import get_password_hash
+        hashed = get_password_hash(password.strip())
+        cursor.execute("UPDATE users SET is_admin = ?, role = ?, hashed_password = ? WHERE id = ?", (is_admin, role, hashed, user_id))
+    else:
+        cursor.execute("UPDATE users SET is_admin = ?, role = ? WHERE id = ?", (is_admin, role, user_id))
+    conn.commit()
+    conn.close()
+
+def delete_user(user_id: str) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM stage_assignments WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
 
 def update_user_role(user_id: str, is_admin: int) -> None:
     conn = get_connection()
@@ -152,7 +315,7 @@ def parse_row(row) -> Dict[str, Any]:
     if not row:
         return None
     d = dict(row)
-    for field in ["qa_review", "ceo_decision", "warehouse_fulfillment"]:
+    for field in ["qa_review", "ceo_decision", "warehouse_fulfillment", "stock_return", "disposal"]:
         if d.get(field):
             try:
                 d[field] = json.loads(d[field])
@@ -160,6 +323,19 @@ def parse_row(row) -> Dict[str, Any]:
                 d[field] = None
         else:
             d[field] = None
+    if not d.get("product_id") and d.get("product_name"):
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM products WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1",
+                (d["product_name"],)
+            )
+            prod_row = cursor.fetchone()
+            conn.close()
+            d["product_id"] = prod_row["id"] if prod_row else (d.get("product_short_code") or "")
+        except Exception:
+            d["product_id"] = d.get("product_short_code") or ""
     return d
 
 def get_customers() -> List[Dict[str, Any]]:
@@ -336,6 +512,69 @@ def remove_product(product_id: str) -> None:
         conn.commit()
     except Exception as e:
         print(f"Error removing product: {e}")
+    finally:
+        conn.close()
+
+# ---------- Defect Types Masterlist Functions ----------
+
+def get_defect_types() -> List[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, description, created_at FROM defect_types ORDER BY name ASC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def add_defect_type(data: Dict[str, Any]) -> Dict[str, Any]:
+    import uuid
+    conn = get_connection()
+    cursor = conn.cursor()
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Defect type name cannot be blank")
+    defect_id = str(data.get("id") or "").strip() or f"DEF-{uuid.uuid4().hex[:6].upper()}"
+    description = str(data.get("description") or "").strip()
+    now_str = datetime.now().isoformat()
+    cursor.execute("""
+    INSERT INTO defect_types (id, name, description, created_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+        description = excluded.description
+    """, (defect_id, name, description, now_str))
+    conn.commit()
+    conn.close()
+    return {"id": defect_id, "name": name, "description": description, "created_at": now_str}
+
+def add_defect_types_bulk(defects_data: List[Dict[str, Any]]) -> int:
+    import uuid
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        count = 0
+        now_str = datetime.now().isoformat()
+        for item in defects_data:
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            did = str(item.get("id") or "").strip() or f"DEF-{uuid.uuid4().hex[:6].upper()}"
+            desc = str(item.get("description") or "").strip()
+            cursor.execute("""
+            INSERT INTO defect_types (id, name, description, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET description = excluded.description
+            """, (did, name, desc, now_str))
+            count += 1
+        conn.commit()
+        return count
+    finally:
+        conn.close()
+
+def delete_defect_type(defect_id: str) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM defect_types WHERE id = ?", (defect_id,))
+        conn.commit()
     finally:
         conn.close()
 
@@ -535,6 +774,110 @@ def update_warehouse_fulfillment(complaint_id: str, warehouse_data: Dict[str, An
     conn.close()
     return get_complaint_by_id(complaint_id)
 
+def update_stock_return(complaint_id: str, stock_return_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT stock_return FROM complaints WHERE id = ?", (complaint_id,))
+    row = cursor.fetchone()
+    if row and row["stock_return"]:
+        try:
+            existing = json.loads(row["stock_return"]) if isinstance(row["stock_return"], str) else dict(row["stock_return"])
+            if "qa_signed_off" not in stock_return_data and "qa_signed_off" in existing:
+                stock_return_data["qa_signed_off"] = existing["qa_signed_off"]
+                stock_return_data["qa_signed_off_by"] = existing.get("qa_signed_off_by", "")
+                stock_return_data["qa_signed_off_date"] = existing.get("qa_signed_off_date", "")
+                stock_return_data["qa_signed_off_notes"] = existing.get("qa_signed_off_notes", "")
+        except Exception:
+            pass
+    cursor.execute("""
+    UPDATE complaints
+    SET stock_return = ?
+    WHERE id = ?
+    """, (json.dumps(stock_return_data), complaint_id))
+    conn.commit()
+    conn.close()
+    return get_complaint_by_id(complaint_id)
+
+def update_stock_return_qa_signoff(complaint_id: str, signoff_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT stock_return FROM complaints WHERE id = ?", (complaint_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+    curr_sr = {}
+    if row["stock_return"]:
+        try:
+            curr_sr = json.loads(row["stock_return"]) if isinstance(row["stock_return"], str) else dict(row["stock_return"])
+        except Exception:
+            curr_sr = {}
+    signed_off_val = signoff_data.get("signed_off", "No")
+    curr_sr["qa_signed_off"] = signed_off_val
+    curr_sr["qa_signed_off_by"] = signoff_data.get("qa_name", "Dr. Chanreth")
+    curr_sr["qa_signed_off_date"] = signoff_data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    if "notes" in signoff_data:
+        curr_sr["qa_signed_off_notes"] = signoff_data.get("notes", "")
+
+    cursor.execute("""
+    UPDATE complaints
+    SET stock_return = ?
+    WHERE id = ?
+    """, (json.dumps(curr_sr), complaint_id))
+    conn.commit()
+    conn.close()
+    return get_complaint_by_id(complaint_id)
+
+def update_disposal(complaint_id: str, disposal_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Stage 06: Disposal Action (Finance Manager).
+    Calls tax to count stock, records disposal date and write-off cut, and closes or leaves open the complaint.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    disp_status = str(disposal_data.get("status") or "Closed").strip()
+    new_status = "Closed" if disp_status == "Closed" else "Completed"
+    cursor.execute("""
+    UPDATE complaints
+    SET disposal = ?, status = ?
+    WHERE id = ?
+    """, (json.dumps(disposal_data), new_status, complaint_id))
+    conn.commit()
+    conn.close()
+    return get_complaint_by_id(complaint_id)
+
+def update_batch_disposal(complaint_ids: List[str], disposal_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Stage 06: Batch Disposal Action (Finance Manager).
+    Applies disposal record across all complaints in the selected/merged Write Off Batch Code(s)
+    and updates their status to 'Closed' (or 'Completed' if Status is 'Open').
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    disp_status = str(disposal_data.get("status") or "Closed").strip()
+    new_status = "Closed" if disp_status == "Closed" else "Completed"
+
+    for cid in complaint_ids:
+        cursor.execute("SELECT stock_return, defect_quantity FROM complaints WHERE id = ?", (cid,))
+        row = cursor.fetchone()
+        if not row:
+            continue
+        item_disp = dict(disposal_data)
+        item_disp.pop("complaint_ids", None)
+        if row["stock_return"]:
+            try:
+                sr = json.loads(row["stock_return"]) if isinstance(row["stock_return"], str) else dict(row["stock_return"])
+                if sr.get("confirmed_write_off_quantity") is not None:
+                    item_disp["disposed_quantity"] = float(sr["confirmed_write_off_quantity"])
+            except Exception:
+                pass
+        cursor.execute("""
+        UPDATE complaints
+        SET disposal = ?, status = ?
+        WHERE id = ?
+        """, (json.dumps(item_disp), new_status, cid))
+    conn.commit()
+    conn.close()
+    return [get_complaint_by_id(cid) for cid in complaint_ids if cid]
+
 def get_metrics_data(
     time_filter: Optional[str] = None,
     date_mode: Optional[str] = "complaint_date",
@@ -562,7 +905,9 @@ def get_metrics_data(
     total_rejected = cursor.fetchone()[0]
     cursor.execute(f"SELECT COUNT(*) FROM complaints {where_clause} AND status = 'Completed'", time_params)
     total_completed = cursor.fetchone()[0]
-    all_statuses = ["Pending QA", "Pending approval", "Approved", "Rejected", "Completed"]
+    cursor.execute(f"SELECT COUNT(*) FROM complaints {where_clause} AND status = 'Closed'", time_params)
+    total_closed = cursor.fetchone()[0]
+    all_statuses = ["Pending QA", "Pending approval", "Approved", "Rejected", "Completed", "Closed"]
     status_counts = {s: 0 for s in all_statuses}
     cursor.execute(f"SELECT status, COUNT(*) FROM complaints {where_clause} GROUP BY status", time_params)
     for row in cursor.fetchall():
@@ -608,7 +953,7 @@ def get_metrics_data(
     trend_date_col = "product_expiry_date" if sort_by in ["expiry_date", "product_expiry_date"] else "complaint_date"
     cursor.execute(f"SELECT {trend_date_col}, COUNT(*) FROM complaints {where_clause} GROUP BY {trend_date_col} ORDER BY {trend_date_col} {order_dir}", time_params)
     trend = [{"date": row[0], "shortDate": row[0][5:] if row[0] else "", "count": row[1]} for row in cursor.fetchall()]
-    cursor.execute("""
+    cursor.execute(f"""
     SELECT manufacturing_code, product_expiry_date, COUNT(*) as cnt
     FROM complaints
     {where_clause}
@@ -627,7 +972,9 @@ def get_metrics_data(
             "total_approved": total_approved,
             "pending_decision": pending_decision,
             "rejected": total_rejected,
-            "completed": total_completed
+            "completed": total_completed,
+            "total_closed": total_closed,
+            "closed": total_closed
         },
         "status_breakdown": [{"status": s, "count": status_counts[s]} for s in all_statuses],
         "defect_types": defect_types,

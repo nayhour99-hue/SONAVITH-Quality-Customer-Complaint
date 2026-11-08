@@ -47,6 +47,10 @@ STATUS_STYLES = {
         "fill": PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid"),
         "font": Font(name="Segoe UI", size=10, bold=True, color="334155"),
     },
+    "Closed": {
+        "fill": PatternFill(start_color="EDE9FE", end_color="EDE9FE", fill_type="solid"),
+        "font": Font(name="Segoe UI", size=10, bold=True, color="5B21B6"),
+    },
 }
 
 def create_placeholder_thumbnail(label: str = "Defect Proof", size: Tuple[int, int] = (90, 65)) -> io.BytesIO:
@@ -177,6 +181,10 @@ def generate_complaints_excel(
     fill_sec_qa = PatternFill(start_color=COLOR_HEADER_QA, end_color=COLOR_HEADER_QA, fill_type="solid")
     fill_sec_ceo = PatternFill(start_color=COLOR_HEADER_CEO, end_color=COLOR_HEADER_CEO, fill_type="solid")
     fill_sec_wh = PatternFill(start_color=COLOR_HEADER_WH, end_color=COLOR_HEADER_WH, fill_type="solid")
+    fill_sec_stock_return = PatternFill(start_color="FEF08A", end_color="FEF08A", fill_type="solid") # Stage 05 Yellow
+    font_header_yellow = Font(name="Segoe UI", size=10, bold=True, color="000000")
+    fill_sec_disposal = PatternFill(start_color="DDD6FE", end_color="DDD6FE", fill_type="solid") # Stage 06 Violet
+    font_header_purple = Font(name="Segoe UI", size=10, bold=True, color="4C1D95")
     
     fill_row_even = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
     fill_row_odd = PatternFill(start_color=COLOR_ZEBRA_ROW, end_color=COLOR_ZEBRA_ROW, fill_type="solid")
@@ -200,7 +208,7 @@ def generate_complaints_excel(
     ws_main.views.sheetView[0].showGridLines = True
     
     # Title Banner Rows (Row 1 & 2)
-    ws_main.merge_cells("A1:AJ1")
+    ws_main.merge_cells("A1:AW1")
     ws_main["A1"] = "SONAVITH - DEFECTIVE PRODUCT REPORT & RESOLUTION REGISTER"
     ws_main["A1"].font = font_title
     ws_main["A1"].fill = fill_title
@@ -209,7 +217,7 @@ def generate_complaints_excel(
     
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     summary_text = f"Generated: {now_str} | Filter: {filter_summary or 'All Active Records'} | Total Complaints: {len(complaints)} records"
-    ws_main.merge_cells("A2:AJ2")
+    ws_main.merge_cells("A2:AW2")
     ws_main["A2"] = summary_text
     ws_main["A2"].font = font_sub
     ws_main["A2"].fill = fill_title
@@ -221,19 +229,23 @@ def generate_complaints_excel(
     # 2. QA Review: V3:AA3 (6 cols)
     # 3. CEO Decision: AB3:AD3 (3 cols)
     # 4. Warehouse Fulfillment: AE3:AI3 (5 cols)
-    # 5. Metadata: AJ3:AJ3 (1 col)
+    # 5. Stage 05 Stock Return Control: AJ3:AP3 (7 cols)
+    # 6. Stage 06 Disposal Action: AQ3:AV3 (6 cols)
+    # 7. Metadata: AW3:AW3 (1 col)
     category_ranges = [
-        ("A3:U3", "STAGE 1: SALES INTAKE & DEFECT DETAILS", fill_sec_sales),
-        ("V3:AA3", "STAGE 2: QUALITY ASSURANCE (QA) REVIEW", fill_sec_qa),
-        ("AB3:AD3", "STAGE 3: CEO EXECUTIVE DECISION", fill_sec_ceo),
-        ("AE3:AI3", "STAGE 4: WAREHOUSE REPLACEMENT FULFILLMENT", fill_sec_wh),
-        ("AJ3:AJ3", "SYSTEM AUDIT", fill_sec_sales),
+        ("A3:U3", "STAGE 1: SALES INTAKE & DEFECT DETAILS", fill_sec_sales, font_section),
+        ("V3:AA3", "STAGE 2: QUALITY ASSURANCE (QA) REVIEW", fill_sec_qa, font_section),
+        ("AB3:AD3", "STAGE 3: CEO EXECUTIVE DECISION", fill_sec_ceo, font_section),
+        ("AE3:AI3", "STAGE 4: WAREHOUSE REPLACEMENT FULFILLMENT", fill_sec_wh, font_section),
+        ("AJ3:AP3", "STAGE 5: STOCK RETURN CONTROL", fill_sec_stock_return, font_header_yellow),
+        ("AQ3:AV3", "STAGE 6: DISPOSAL ACTION (FINANCE & TAX)", fill_sec_disposal, font_header_purple),
+        ("AW3:AW3", "SYSTEM AUDIT", fill_sec_sales, font_section),
     ]
-    for cell_range, title, fill in category_ranges:
+    for cell_range, title, fill, f_style in category_ranges:
         ws_main.merge_cells(cell_range)
         first_cell = cell_range.split(":")[0]
         ws_main[first_cell] = title
-        ws_main[first_cell].font = font_section
+        ws_main[first_cell].font = f_style
         ws_main[first_cell].fill = fill
         ws_main[first_cell].alignment = align_center
     ws_main.row_dimensions[3].height = 26
@@ -279,8 +291,23 @@ def generate_complaints_excel(
         (33, "Dispatch Date", 15, align_center),
         (34, "Dispatched Qty", 15, align_right),
         (35, "Delivery Notes", 34, align_left),
+        # Stage 05: Stock Return Control
+        (36, "Bin Location of Stock Return", 26, align_left),
+        (37, "Photo Reference", 18, align_center),
+        (38, "Returned QTY", 14, align_right),
+        (39, "Status (Write Off/Rework)", 24, align_center),
+        (40, "Confirmed Write Off QTY", 22, align_right),
+        (41, "Confirmed Rework/Saleable QTY", 26, align_right),
+        (42, "QA Signed Off", 18, align_center),
+        # Stage 06: Disposal Action (Finance & Tax)
+        (43, "Disposal Date", 15, align_center),
+        (44, "Finance Manager", 18, align_left),
+        (45, "Tax Count Verification", 28, align_center),
+        (46, "Disposed / Cut QTY", 22, align_right),
+        (47, "Disposal Method", 24, align_center),
+        (48, "Disposal Notes", 34, align_left),
         # Audit
-        (36, "Logged Timestamp", 20, align_center),
+        (49, "Logged Timestamp", 20, align_center),
     ]
     
     ws_main.row_dimensions[4].height = 28
@@ -299,6 +326,12 @@ def generate_complaints_excel(
             cell.fill = fill_sec_ceo
         elif col_idx <= 35:
             cell.fill = fill_sec_wh
+        elif col_idx <= 42:
+            cell.fill = fill_sec_stock_return
+            cell.font = font_header_yellow
+        elif col_idx <= 48:
+            cell.fill = fill_sec_disposal
+            cell.font = font_header_purple
         else:
             cell.fill = fill_sec_sales
             
@@ -319,6 +352,8 @@ def generate_complaints_excel(
         qa = item.get("qa_review") or {}
         ceo = item.get("ceo_decision") or {}
         wh = item.get("warehouse_fulfillment") or {}
+        sr = item.get("stock_return") or {}
+        disp = item.get("disposal") or {}
         
         row_values = [
             item.get("id", ""),
@@ -359,6 +394,29 @@ def generate_complaints_excel(
             wh.get("dispatch_date", "") if wh else "",
             wh.get("dispatched_quantity", "") if wh else "",
             wh.get("delivery_notes", "") if wh else "",
+            # Stage 05: Stock Return Control
+            (
+                f"{sr.get('bin_location', '')} (+ Virtual: {sr.get('virtual_returned_quantity')} at {sr.get('virtual_location') or 'site'})"
+                if sr.get("virtual_returned_quantity") and sr.get("bin_location") and sr.get("bin_location") != "Virtual Write-Off"
+                else (
+                    f"Virtual Site: {sr.get('virtual_location') or 'Customer Place'}"
+                    if sr.get("virtual_returned_quantity")
+                    else (sr.get("bin_location", "") or "—")
+                )
+            ) if sr else "—",
+            "", # Stock Return Photo cell in column 37 (AK)
+            sr.get("returned_quantity", "") if sr.get("returned_quantity") is not None else "—",
+            sr.get("disposition_status", "") or "—",
+            sr.get("confirmed_write_off_quantity", "") if sr.get("confirmed_write_off_quantity") is not None else "—",
+            sr.get("confirmed_rework_quantity", "") if sr.get("confirmed_rework_quantity") is not None else "—",
+            sr.get("qa_signed_off", "No") if sr else "Pending",
+            # Stage 06: Disposal Action (Finance & Tax)
+            disp.get("disposal_date", "") or "—",
+            disp.get("finance_manager_name", "") or "—",
+            disp.get("tax_count_status", "") or "—",
+            disp.get("disposed_quantity", "") if disp.get("disposed_quantity") is not None else "—",
+            disp.get("disposal_method", "") or "—",
+            disp.get("notes", "") or "—",
             # Audit
             item.get("created_at", ""),
         ]
@@ -382,8 +440,18 @@ def generate_complaints_excel(
                     cell.fill = STATUS_STYLES[status_str]["fill"]
                     cell.font = STATUS_STYLES[status_str]["font"]
                     
+            # QA Signed Off styling
+            if col_idx == 42:
+                so_str = str(val).strip().lower()
+                if so_str == "yes":
+                    cell.font = Font(name="Segoe UI", size=9, bold=True, color="15803D")
+                elif so_str == "no":
+                    cell.font = Font(name="Segoe UI", size=9, bold=True, color="B91C1C")
+                else:
+                    cell.font = Font(name="Segoe UI", size=9, italic=True, color="9CA3AF")
+                    
             # Numbers
-            if col_idx in [11, 17, 24, 34] and isinstance(val, (int, float)):
+            if col_idx in [11, 17, 24, 34, 38, 40, 41, 46] and isinstance(val, (int, float)):
                 cell.number_format = "#,##0"
                 
         # Embed Photo Image in Column 21 (U)
@@ -398,10 +466,22 @@ def generate_complaints_excel(
             cell_p.font = Font(name="Segoe UI", size=8.5, color="9CA3AF", italic=True)
             cell_p.alignment = align_center
 
+        # Embed Stock Return Photo in Column 37 (AK)
+        sr_photo = sr.get("photo_url")
+        if sr_photo:
+            sr_resolved = resolve_photo_image(sr_photo, max_size=(82, 54))
+            if sr_resolved:
+                xl_sr_img, _ = sr_resolved
+                ws_main.add_image(xl_sr_img, f"AK{row_idx}")
+            else:
+                cell_sr = ws_main.cell(row=row_idx, column=37, value="Photo attached")
+                cell_sr.font = Font(name="Segoe UI", size=8.5, color="0284C7")
+                cell_sr.alignment = align_center
+
         row_idx += 1
         
     # Auto-filter over all data
-    ws_main.auto_filter.ref = f"A4:AJ{max(row_idx - 1, 4)}"
+    ws_main.auto_filter.ref = f"A4:AQ{max(row_idx - 1, 4)}"
 
     # -------------------------------------------------------------------------
     # Sheet 2: Photo Evidence Gallery Sheet

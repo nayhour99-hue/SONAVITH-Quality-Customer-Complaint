@@ -1,6 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { getCustomers, getProducts, addCustomer, addProduct, addCustomersBulk, addProductsBulk } from '../services/api';
+import {
+  getCustomers,
+  getProducts,
+  getDefectTypes,
+  addCustomer,
+  addProduct,
+  addDefectType,
+  addCustomersBulk,
+  addProductsBulk,
+  addDefectTypesBulk,
+  deleteDefectType,
+} from '../services/api';
+import { Trash2, AlertTriangle, Package, Users } from 'lucide-react';
 
 const getVal = (row, keys) => {
   for (const k of keys) {
@@ -22,12 +34,22 @@ const getVal = (row, keys) => {
 };
 
 export default function MasterlistView() {
-  const [activeTab, setActiveTab] = useState('customers'); // customers or products
+  const [activeTab, setActiveTab] = useState('defect_types'); // 'defect_types', 'customers', 'products'
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
+  const [defectTypes, setDefectTypes] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
   
-  const [form, setForm] = useState({ id: '', name: '', location: '', contact: '', short_code: '', unit_of_measure: '' });
+  const [form, setForm] = useState({
+    id: '',
+    name: '',
+    location: '',
+    contact: '',
+    short_code: '',
+    unit_of_measure: '',
+    description: '',
+  });
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -37,9 +59,14 @@ export default function MasterlistView() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [c, p] = await Promise.all([getCustomers(), getProducts()]);
+      const [c, p, d] = await Promise.all([
+        getCustomers(),
+        getProducts(),
+        getDefectTypes().catch(() => []),
+      ]);
       setCustomers(c);
       setProducts(p);
+      setDefectTypes(d);
     } catch (e) {
       console.error(e);
     } finally {
@@ -53,15 +80,33 @@ export default function MasterlistView() {
 
   const handleAddSingle = async (e) => {
     e.preventDefault();
-    if (!form.name) return;
+    if (!form.name.trim()) return;
     
     if (activeTab === 'customers') {
       await addCustomer({ id: form.id, name: form.name, location: form.location, contact: form.contact });
-    } else {
+      setSuccessMsg(`Customer "${form.name}" added successfully`);
+    } else if (activeTab === 'products') {
       await addProduct({ id: form.id, name: form.name, short_code: form.short_code, unit_of_measure: form.unit_of_measure });
+      setSuccessMsg(`Product "${form.name}" added successfully`);
+    } else {
+      await addDefectType({ id: form.id, name: form.name, description: form.description });
+      setSuccessMsg(`Defect Type "${form.name}" registered`);
     }
-    setForm({ id: '', name: '', location: '', contact: '', short_code: '', unit_of_measure: '' });
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setForm({ id: '', name: '', location: '', contact: '', short_code: '', unit_of_measure: '', description: '' });
     fetchData();
+  };
+
+  const handleDeleteDefect = async (id, name) => {
+    if (!window.confirm(`Are you sure you want to delete defect type "${name}"?`)) return;
+    try {
+      await deleteDefectType(id);
+      setSuccessMsg(`Defect type "${name}" removed.`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+      fetchData();
+    } catch (e) {
+      alert(e.message);
+    }
   };
 
   const handleFileUpload = (e) => {
@@ -84,7 +129,7 @@ export default function MasterlistView() {
           contact: getVal(row, ['contact', 'Contact', 'CONTACT', 'phone', 'Phone', 'telephone', 'customer_contact'])
         })).filter(c => c.name);
         await addCustomersBulk(formatted);
-      } else {
+      } else if (activeTab === 'products') {
         const formatted = data.map(row => ({
           id: getVal(row, ['id', 'Id', 'ID', 'product_id', 'product id']),
           name: getVal(row, ['name', 'Name', 'NAME', 'product_name', 'product name', 'Product Name', 'description', 'item']),
@@ -92,6 +137,13 @@ export default function MasterlistView() {
           unit_of_measure: getVal(row, ['unit_of_measure', 'UnitOfMeasure', 'unitOfMeasure', 'Unit of Measure', 'unit of measure', 'uom', 'UOM', 'Unit', 'unit', 'packing', 'size'])
         })).filter(p => p.name);
         await addProductsBulk(formatted);
+      } else {
+        const formatted = data.map(row => ({
+          id: getVal(row, ['id', 'Id', 'ID', 'defect_id', 'defect id']),
+          name: getVal(row, ['name', 'Name', 'NAME', 'defect_type', 'defect type', 'Defect Type', 'defect']),
+          description: getVal(row, ['description', 'Description', 'desc', 'Notes', 'notes'])
+        })).filter(d => d.name);
+        await addDefectTypesBulk(formatted);
       }
       if (fileInputRef.current) fileInputRef.current.value = '';
       fetchData();
@@ -100,117 +152,209 @@ export default function MasterlistView() {
   };
 
   return (
-    <div className="card" style={{ padding: '20px' }}>
-      <h2>Masterlist Management</h2>
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-        <button className={activeTab === 'customers' ? 'btn-primary' : 'btn-secondary'} onClick={() => setActiveTab('customers')}>Customers</button>
-        <button className={activeTab === 'products' ? 'btn-primary' : 'btn-secondary'} onClick={() => setActiveTab('products')}>Products</button>
+    <div className="card" style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <div>
+          <h2 style={{ margin: '0 0 4px 0', fontSize: '1.35rem', color: 'var(--color-brand)' }}>Masterlist & Defect Type Registration</h2>
+          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
+            Manage core master data. Defect types registered here automatically populate dropdown lists for both Sales intake and QA confirmation.
+          </p>
+        </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '40px' }}>
+      {successMsg && (
+        <div style={{ backgroundColor: '#dcfce7', color: '#15803d', padding: '10px 14px', borderRadius: 6, fontSize: '0.85rem', marginBottom: 16 }}>
+          ✓ {successMsg}
+        </div>
+      )}
+
+      {/* Navigation Sub-Tabs */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px' }}>
+        <button
+          className={activeTab === 'defect_types' ? 'btn-primary' : 'btn-secondary'}
+          onClick={() => setActiveTab('defect_types')}
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <AlertTriangle size={15} />
+          <span>Defect Type Registration ({defectTypes.length})</span>
+        </button>
+        <button
+          className={activeTab === 'customers' ? 'btn-primary' : 'btn-secondary'}
+          onClick={() => setActiveTab('customers')}
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <Users size={15} />
+          <span>Customers ({customers.length})</span>
+        </button>
+        <button
+          className={activeTab === 'products' ? 'btn-primary' : 'btn-secondary'}
+          onClick={() => setActiveTab('products')}
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <Package size={15} />
+          <span>Products ({products.length})</span>
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', gap: '36px', flexWrap: 'wrap' }}>
         {/* Left side: Add form */}
-        <div style={{ flex: 1 }}>
-          <h3>Add New {activeTab === 'customers' ? 'Customer' : 'Product'}</h3>
-          <form onSubmit={handleAddSingle} style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '300px' }}>
-            <div>
-              <label>ID (Optional)</label>
-              <input name="id" value={form.id} onChange={handleInputChange} className="form-input" placeholder="Auto-generated if empty" />
-            </div>
-            <div>
-              <label>Name*</label>
-              <input name="name" value={form.name} onChange={handleInputChange} required className="form-input" />
-            </div>
-            
-            {activeTab === 'customers' ? (
-              <>
-                <div>
-                  <label>Location</label>
-                  <input name="location" value={form.location} onChange={handleInputChange} className="form-input" />
-                </div>
-                <div>
-                  <label>Contact</label>
-                  <input name="contact" value={form.contact} onChange={handleInputChange} className="form-input" />
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  <label>Short Code</label>
-                  <input name="short_code" value={form.short_code} onChange={handleInputChange} className="form-input" placeholder="e.g. FFCM, FFAF (duplicates allowed)" />
-                </div>
-                <div>
-                  <label>Unit of Measure (UOM)</label>
-                  <input name="unit_of_measure" value={form.unit_of_measure} onChange={handleInputChange} className="form-input" placeholder="e.g. 2L-BTL, 1L-BTL (duplicates allowed)" />
-                </div>
-              </>
-            )}
-            
-            <button type="submit" className="btn-primary">Add Single Record</button>
-          </form>
+        <div style={{ flex: '1 1 320px', maxWidth: '380px' }}>
+          <div style={{ background: '#f8fafc', padding: 18, borderRadius: 10, border: '1px solid var(--color-border)' }}>
+            <h3 style={{ margin: '0 0 12px 0', fontSize: '1rem', color: '#1e293b' }}>
+              Add {activeTab === 'defect_types' ? 'Defect Type' : activeTab === 'customers' ? 'Customer' : 'Product'}
+            </h3>
+            <form onSubmit={handleAddSingle} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label className="form-label">ID (Optional)</label>
+                <input name="id" value={form.id} onChange={handleInputChange} className="form-input" placeholder="Auto-generated if empty" />
+              </div>
+              <div>
+                <label className="form-label">{activeTab === 'defect_types' ? 'Defect Type Name*' : 'Name*'}</label>
+                <input
+                  name="name"
+                  value={form.name}
+                  onChange={handleInputChange}
+                  required
+                  className="form-input"
+                  placeholder={activeTab === 'defect_types' ? 'e.g. Packaging leak, Curdling' : ''}
+                />
+              </div>
 
-          {activeTab === 'products' && (
-            <div style={{ marginTop: 10, fontSize: '0.78rem', color: '#047857', background: '#ecfdf5', padding: '6px 10px', borderRadius: 6, maxWidth: 300 }}>
-              ✓ Duplicate Short Codes & duplicate UOMs are fully permitted across products.
-            </div>
-          )}
+              {activeTab === 'defect_types' && (
+                <div>
+                  <label className="form-label">Description / Guidelines</label>
+                  <textarea
+                    name="description"
+                    value={form.description}
+                    onChange={handleInputChange}
+                    className="form-textarea"
+                    rows="3"
+                    placeholder="Provide inspection guidelines or visual criteria for this defect type..."
+                  ></textarea>
+                </div>
+              )}
+              
+              {activeTab === 'customers' && (
+                <>
+                  <div>
+                    <label className="form-label">Location</label>
+                    <input name="location" value={form.location} onChange={handleInputChange} className="form-input" />
+                  </div>
+                  <div>
+                    <label className="form-label">Contact</label>
+                    <input name="contact" value={form.contact} onChange={handleInputChange} className="form-input" />
+                  </div>
+                </>
+              )}
 
-          <hr style={{ margin: '30px 0', borderColor: 'var(--color-border)' }} />
+              {activeTab === 'products' && (
+                <>
+                  <div>
+                    <label className="form-label">Short Code</label>
+                    <input name="short_code" value={form.short_code} onChange={handleInputChange} className="form-input" placeholder="e.g. FFCM, FFAF" />
+                  </div>
+                  <div>
+                    <label className="form-label">Unit of Measure (UOM)</label>
+                    <input name="unit_of_measure" value={form.unit_of_measure} onChange={handleInputChange} className="form-input" placeholder="e.g. 2L-BTL, PACK" />
+                  </div>
+                </>
+              )}
+              
+              <button type="submit" className="btn-primary" style={{ marginTop: 4 }}>
+                {activeTab === 'defect_types' ? '+ Register Defect Type' : '+ Add Record'}
+              </button>
+            </form>
 
-          <h3>Bulk Upload (Excel)</h3>
-          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '10px' }}>
-            Upload an Excel file (.xlsx) with columns: 
-            {activeTab === 'customers' ? ' id, name, location, contact' : ' id, name, short_code (or Code), unit_of_measure (or UOM)'}.
-          </p>
-          <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} ref={fileInputRef} />
+            <hr style={{ margin: '20px 0', borderColor: 'var(--color-border)' }} />
+
+            <h4 style={{ margin: '0 0 6px 0', fontSize: '0.88rem', color: '#475569' }}>Bulk Upload via Excel</h4>
+            <p style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)', marginBottom: 10 }}>
+              Upload an Excel (.xlsx / .csv) file with column: 
+              {activeTab === 'defect_types' && ' name, description'}
+              {activeTab === 'customers' && ' name, location, contact'}
+              {activeTab === 'products' && ' name, short_code, unit_of_measure'}.
+            </p>
+            <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} ref={fileInputRef} style={{ fontSize: '0.8rem' }} />
+          </div>
         </div>
 
         {/* Right side: List */}
-        <div style={{ flex: 2 }}>
-          <h3>{activeTab === 'customers' ? 'Customers List' : 'Products List'}</h3>
-          {loading ? <p>Loading...</p> : (
-            <div className="table-container">
+        <div style={{ flex: '2 1 500px', minWidth: '320px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 style={{ margin: 0, fontSize: '1rem', color: '#1e293b' }}>
+              {activeTab === 'defect_types' ? 'Registered Defect Types' : activeTab === 'customers' ? 'Customers List' : 'Products List'}
+            </h3>
+            <span style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>
+              Total: {activeTab === 'defect_types' ? defectTypes.length : activeTab === 'customers' ? customers.length : products.length}
+            </span>
+          </div>
+
+          {loading ? <p>Loading data...</p> : (
+            <div className="table-container" style={{ maxHeight: '600px', overflowY: 'auto' }}>
               <table className="complaints-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Name</th>
-                  {activeTab === 'customers' ? (
-                    <>
-                      <th>Location</th>
-                      <th>Contact</th>
-                    </>
-                  ) : (
-                    <>
-                      <th>Short Code</th>
-                      <th>UOM</th>
-                    </>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {(activeTab === 'customers' ? customers : products).map((item, idx) => (
-                  <tr key={idx}>
-                    <td className="complaint-id-cell">{item.id}</td>
-                    <td>{item.name}</td>
-                    {activeTab === 'customers' ? (
+                <thead>
+                  <tr>
+                    <th style={{ width: '90px' }}>ID</th>
+                    <th>Name</th>
+                    {activeTab === 'defect_types' && <th>Description / Standards</th>}
+                    {activeTab === 'customers' && (
                       <>
-                        <td>{item.location}</td>
-                        <td>{item.contact}</td>
-                      </>
-                    ) : (
-                      <>
-                        <td>{item.short_code}</td>
-                        <td>{item.unit_of_measure}</td>
+                        <th>Location</th>
+                        <th>Contact</th>
                       </>
                     )}
+                    {activeTab === 'products' && (
+                      <>
+                        <th>Short Code</th>
+                        <th>UOM</th>
+                      </>
+                    )}
+                    {activeTab === 'defect_types' && <th style={{ textAlign: 'center', width: '60px' }}>Action</th>}
                   </tr>
-                ))}
-                {(activeTab === 'customers' ? customers.length : products.length) === 0 && (
-                  <tr>
-                    <td colSpan={activeTab === 'customers' ? 4 : 4} style={{ textAlign: 'center', padding: '20px' }}>No records found.</td>
-                  </tr>
-                )}
-              </tbody>
+                </thead>
+                <tbody>
+                  {activeTab === 'defect_types' && defectTypes.map((item) => (
+                    <tr key={item.id}>
+                      <td className="complaint-id-cell">{item.id}</td>
+                      <td style={{ fontWeight: 600, color: '#0f172a' }}>{item.name}</td>
+                      <td style={{ color: '#64748b', fontSize: '0.82rem' }}>{item.description || '—'}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteDefect(item.id, item.name)}
+                          title="Delete defect type"
+                          style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+
+                  {activeTab === 'customers' && customers.map((item, idx) => (
+                    <tr key={item.id || idx}>
+                      <td className="complaint-id-cell">{item.id}</td>
+                      <td style={{ fontWeight: 500 }}>{item.name}</td>
+                      <td>{item.location}</td>
+                      <td>{item.contact}</td>
+                    </tr>
+                  ))}
+
+                  {activeTab === 'products' && products.map((item, idx) => (
+                    <tr key={item.id || idx}>
+                      <td className="complaint-id-cell">{item.id}</td>
+                      <td style={{ fontWeight: 500 }}>{item.name}</td>
+                      <td>{item.short_code}</td>
+                      <td>{item.unit_of_measure}</td>
+                    </tr>
+                  ))}
+
+                  {((activeTab === 'defect_types' ? defectTypes.length : activeTab === 'customers' ? customers.length : products.length) === 0) && (
+                    <tr>
+                      <td colSpan={4} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>No records found.</td>
+                    </tr>
+                  )}
+                </tbody>
               </table>
             </div>
           )}

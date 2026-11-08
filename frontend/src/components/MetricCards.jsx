@@ -7,6 +7,7 @@ export default function MetricCards({ kpis }) {
     { label: 'Pending decision', value: kpis?.pending_decision ?? 0 },
     { label: 'Rejected', value: kpis?.rejected ?? 0 },
     { label: 'Completed', value: kpis?.completed ?? 0 },
+    { label: 'Total Close', value: kpis?.total_closed ?? kpis?.closed ?? 0 },
   ];
 
   return (
