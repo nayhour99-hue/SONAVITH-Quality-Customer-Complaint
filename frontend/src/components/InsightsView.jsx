@@ -190,9 +190,19 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     );
     commonComplaints.forEach(c => {
       const p = c.product_name || 'Unknown';
-      const qty = parseInt(c.defect_quantity, 10) || 0;
-      if (!map[p]) map[p] = { product: p, original_quantity: 0, adjusted_quantity: 0 };
-      map[p].original_quantity += qty;
+      const defQty = parseInt(c.defect_quantity, 10) || 0;
+      const shipQty = parseInt(c.order_quantity, 10) || 0;
+      if (!map[p]) {
+        map[p] = { 
+          product: p, 
+          shipped_quantity: 0, 
+          original_quantity: 0, 
+          adjusted_quantity: 0,
+          defect_rate: '0.0'
+        };
+      }
+      map[p].shipped_quantity += shipQty;
+      map[p].original_quantity += defQty;
       // Pull warehouse exchanged quantity from warehouse_fulfillment
       const wh = c.warehouse_fulfillment;
       if (wh) {
@@ -205,8 +215,60 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       }
     });
     return Object.values(map)
+      .map(item => ({
+        ...item,
+        defect_rate: item.shipped_quantity > 0 
+          ? ((item.original_quantity / item.shipped_quantity) * 100).toFixed(1)
+          : '0.0'
+      }))
       .sort((a, b) => b.original_quantity - a.original_quantity)
       .slice(0, 20);
+  }, [filteredComplaints]);
+
+  // Dedicated aggregation for internal warehouse incidents
+  const warehouseIncidents = useMemo(() => {
+    const whComplaints = filteredComplaints.filter(
+      c => (c.customer_name || '').trim().toLowerCase() === 'sonavith warehouse'
+    );
+    let totalBatchVolume = 0;
+    let totalDamagedVolume = 0;
+    const byProductMap = {};
+
+    whComplaints.forEach(c => {
+      const batchQty = parseInt(c.order_quantity, 10) || 0;
+      const dmgQty = parseInt(c.defect_quantity, 10) || 0;
+      totalBatchVolume += batchQty;
+      totalDamagedVolume += dmgQty;
+
+      const p = c.product_name || 'Unknown';
+      if (!byProductMap[p]) {
+        byProductMap[p] = { 
+          product: p, 
+          batch_quantity: 0, 
+          damaged_quantity: 0, 
+          defect_type: c.defect_type || 'Damage',
+          complaint_id: c.id,
+          location: c.customer_location || 'Central Warehouse',
+          temperature: c.storage_temp || 'Cold Room',
+          status: c.status
+        };
+      }
+      byProductMap[p].batch_quantity += batchQty;
+      byProductMap[p].damaged_quantity += dmgQty;
+    });
+
+    const lossRate = totalBatchVolume > 0 
+      ? ((totalDamagedVolume / totalBatchVolume) * 100).toFixed(2)
+      : '0.00';
+
+    return {
+      complaints: whComplaints,
+      count: whComplaints.length,
+      totalBatchVolume,
+      totalDamagedVolume,
+      lossRate,
+      byProduct: Object.values(byProductMap)
+    };
   }, [filteredComplaints]);
 
   const mfgSummary = useMemo(() => {
@@ -506,6 +568,40 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     return { ordered, defective, qaConfirmed, exchanged, defectRate };
   }, [filteredComplaints]);
 
+  // Aggregate Customer-only shipment and defect metrics (excluding internal warehouse)
+  const customerTotals = useMemo(() => {
+    let shipped = 0;
+    let defective = 0;
+    let qaConfirmed = 0;
+    let exchanged = 0;
+
+    const commonComplaints = filteredComplaints.filter(
+      (c) => (c.customer_name || '').trim().toLowerCase() !== 'sonavith warehouse'
+    );
+
+    commonComplaints.forEach((c) => {
+      const ord = Number(c.order_quantity) || 0;
+      const def = Number(c.defect_quantity) || 0;
+      const qaDef =
+        c.qa_review?.confirmed_defect_quantity !== undefined &&
+        c.qa_review?.confirmed_defect_quantity !== null
+          ? Number(c.qa_review.confirmed_defect_quantity)
+          : def;
+      const exch =
+        Number(c.warehouse_fulfillment?.dispatched_quantity) ||
+        Number(c.warehouse_fulfillment?.exchange_quantity) ||
+        0;
+
+      shipped += ord;
+      defective += def;
+      qaConfirmed += qaDef;
+      exchanged += exch;
+    });
+
+    const defectRate = shipped > 0 ? ((defective / shipped) * 100).toFixed(2) : '0.00';
+    return { shipped, defective, qaConfirmed, exchanged, defectRate, count: commonComplaints.length };
+  }, [filteredComplaints]);
+
   // ---------------------------------------------------------------------------
   // 1. Print Executive Insights Report (PDF / Printable View with ALL Charts)
   // ---------------------------------------------------------------------------
@@ -588,10 +684,10 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       `;
     };
 
-    // 3. Speedometer Gauge Generator
+    // 3. Customer Defect Speedometer Gauge Generator
     const generateSpeedometerSvg = () => {
-      const maxScale = Math.max(totals.ordered, totals.defective, 1);
-      const ratio = Math.min(Math.max(totals.defective / maxScale, 0), 1);
+      const maxScale = Math.max(customerTotals.shipped, customerTotals.defective, 1);
+      const ratio = Math.min(Math.max(customerTotals.defective / maxScale, 0), 1);
       const cx = 130;
       const cy = 100;
       const rArc = 70;
@@ -629,7 +725,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       }).join('');
 
       return `
-        <svg width="220" height="155" viewBox="0 0 260 175" style="display:block;margin:0 auto;">
+        <svg width="220" height="165" viewBox="0 0 260 178" style="display:block;margin:0 auto;">
           <defs>
             <linearGradient id="printSpeedoGrad" x1="0%" y1="100%" x2="100%" y2="0%">
               <stop offset="0%" stop-color="#0284c7" />
@@ -648,25 +744,26 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
             <polygon points="5,-3.5 54,-1.2 54,1.2 5,3.5" fill="url(#printNeedleGrad)" />
           </g>
           <circle cx="${cx}" cy="${cy}" r="4.5" fill="#0f172a" />
-          <text x="${cx}" y="142" text-anchor="middle" font-size="20" font-weight="800" fill="#0f172a">${totals.defective.toLocaleString()}</text>
-          <text x="${cx}" y="156" text-anchor="middle" font-size="9" font-weight="700" fill="#0f766e">Defective QTY (${totals.defectRate}%)</text>
+          <text x="${cx}" y="138" text-anchor="middle" font-size="20" font-weight="800" fill="#0f172a">${customerTotals.defective.toLocaleString()}</text>
+          <text x="${cx}" y="152" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7">Defect Rate (${customerTotals.defectRate}%)</text>
+          <text x="${cx}" y="165" text-anchor="middle" font-size="8" font-weight="600" fill="#64748b">${customerTotals.shipped.toLocaleString()} Shipped Units</text>
         </svg>
       `;
     };
 
-    // 4. Product Grouped Bar Chart SVG
-    const generateProductBarsSvg = () => {
+    // 4. Customer Product Shipment vs Defective Bar Chart SVG
+    const generateCustomerShipmentBarsSvg = () => {
       const topProds = quantityByProduct.slice(0, 8);
       if (topProds.length === 0) return '';
-      const BAR_W = 20;
+      const BAR_W = 18;
       const BAR_GAP = 3;
-      const GROUP_GAP = 22;
+      const GROUP_GAP = 20;
       const CHART_H = 140;
-      const PADDING_LEFT = 36;
-      const PADDING_TOP = 14;
+      const PADDING_LEFT = 38;
+      const PADDING_TOP = 20;
       const groupW = BAR_W * 2 + BAR_GAP;
       const totalW = PADDING_LEFT + topProds.length * (groupW + GROUP_GAP);
-      const maxVal = Math.max(...topProds.map(p => Math.max(p.original_quantity, p.adjusted_quantity)), 1);
+      const maxVal = Math.max(...topProds.map(p => Math.max(p.shipped_quantity, p.original_quantity)), 1);
 
       const yTicks = [0, 0.5, 1].map(f => Math.round(f * maxVal));
       const gridlines = yTicks.map(tick => {
@@ -679,20 +776,22 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
 
       const bars = topProds.map((item, idx) => {
         const groupX = PADDING_LEFT + idx * (groupW + GROUP_GAP);
-        const origH = Math.max((item.original_quantity / maxVal) * CHART_H, item.original_quantity > 0 ? 3 : 0);
-        const adjH = Math.max((item.adjusted_quantity / maxVal) * CHART_H, item.adjusted_quantity > 0 ? 3 : 0);
-        const origY = PADDING_TOP + CHART_H - origH;
-        const adjY = PADDING_TOP + CHART_H - adjH;
+        const shipH = Math.max((item.shipped_quantity / maxVal) * CHART_H, item.shipped_quantity > 0 ? 3 : 0);
+        const defH = Math.max((item.original_quantity / maxVal) * CHART_H, item.original_quantity > 0 ? 3 : 0);
+        const shipY = PADDING_TOP + CHART_H - shipH;
+        const defY = PADDING_TOP + CHART_H - defH;
         const labelX = groupX + groupW / 2;
-        const shortName = item.product.length > 22 ? item.product.slice(0, 22) + '...' : item.product;
+        const shortName = item.product.length > 20 ? item.product.slice(0, 20) + '...' : item.product;
+        const rate = item.shipped_quantity > 0 ? ((item.original_quantity / item.shipped_quantity) * 100).toFixed(0) : '0';
 
         return `
           <g>
-            <rect x="${groupX}" y="${origY}" width="${BAR_W}" height="${origH}" rx="2" fill="#0ea5e9" />
-            <text x="${groupX + BAR_W / 2}" y="${origY - 3}" text-anchor="middle" font-size="8" font-weight="700" fill="#0369a1">${item.original_quantity}</text>
-            <rect x="${groupX + BAR_W + BAR_GAP}" y="${adjY}" width="${BAR_W}" height="${adjH}" rx="2" fill="#16a34a" />
-            <text x="${groupX + BAR_W + BAR_GAP + BAR_W / 2}" y="${adjY - 3}" text-anchor="middle" font-size="8" font-weight="700" fill="#15803d">${item.adjusted_quantity}</text>
-            <text transform="translate(${labelX}, ${PADDING_TOP + CHART_H + 8}) rotate(35)" text-anchor="start" font-size="9" fill="#334155">${esc(shortName)}</text>
+            <text x="${labelX}" y="${Math.min(shipY, defY) - 5}" text-anchor="middle" font-size="8" font-weight="800" fill="#dc2626">${rate}%</text>
+            <rect x="${groupX}" y="${shipY}" width="${BAR_W}" height="${shipH}" rx="2" fill="#0284c7" />
+            <text x="${groupX + BAR_W / 2}" y="${shipY - 2}" text-anchor="middle" font-size="7.5" font-weight="700" fill="#0369a1">${item.shipped_quantity}</text>
+            <rect x="${groupX + BAR_W + BAR_GAP}" y="${defY}" width="${BAR_W}" height="${defH}" rx="2" fill="#ef4444" />
+            <text x="${groupX + BAR_W + BAR_GAP + BAR_W / 2}" y="${defY - 2}" text-anchor="middle" font-size="7.5" font-weight="700" fill="#b91c1c">${item.original_quantity}</text>
+            <text transform="translate(${labelX}, ${PADDING_TOP + CHART_H + 8}) rotate(35)" text-anchor="start" font-size="8.5" fill="#334155">${esc(shortName)}</text>
           </g>
         `;
       }).join('');
@@ -703,6 +802,57 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           ${bars}
           <line x1="${PADDING_LEFT}" y1="${PADDING_TOP + CHART_H}" x2="${totalW}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1.5" />
           <line x1="${PADDING_LEFT}" y1="${PADDING_TOP}" x2="${PADDING_LEFT}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1.5" />
+        </svg>
+      `;
+    };
+
+    // 4B. Internal Warehouse Loss Chart SVG
+    const generateWarehouseLossSvg = () => {
+      const items = warehouseIncidents.byProduct;
+      if (!items || items.length === 0) return '';
+      const rowHeight = 38;
+      const totalH = items.length * rowHeight + 28;
+      const trackX = 185;
+      const trackW = 360;
+
+      const rows = items.map((item, idx) => {
+        const total = item.batch_quantity || 1;
+        const dmgW = Math.max((item.damaged_quantity / total) * trackW, 10);
+        const soundW = trackW - dmgW;
+        const lossPct = ((item.damaged_quantity / total) * 100).toFixed(1);
+        const y = 14 + idx * rowHeight;
+        const shortName = item.product.length > 25 ? item.product.slice(0, 25) + '...' : item.product;
+
+        return `
+          <g>
+            <text x="10" y="${y + 13}" font-size="10.5" font-weight="700" fill="#0f172a">${esc(shortName)}</text>
+            <text x="10" y="${y + 25}" font-size="8.5" font-weight="600" fill="#64748b">Defect: ${esc(item.defect_type)}</text>
+            
+            <rect x="${trackX}" y="${y}" width="${dmgW}" height="18" rx="3" fill="#dc2626" />
+            <rect x="${trackX + dmgW}" y="${y}" width="${soundW}" height="18" rx="3" fill="#0d9488" />
+
+            <text x="${trackX + dmgW / 2}" y="${y + 12}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#ffffff">
+              ${item.damaged_quantity.toLocaleString()} Damaged (${lossPct}%)
+            </text>
+            ${soundW > 60 ? `
+              <text x="${trackX + dmgW + soundW / 2}" y="${y + 12}" text-anchor="middle" font-size="8.5" font-weight="700" fill="#ffffff">
+                ${(item.batch_quantity - item.damaged_quantity).toLocaleString()} Sound Stock
+              </text>
+            ` : ''}
+            <text x="${trackX + trackW + 10}" y="${y + 13}" font-size="10" font-weight="700" fill="#0f172a">
+              ${item.batch_quantity.toLocaleString()} <tspan font-size="8" fill="#64748b">Lot QTY</tspan>
+            </text>
+          </g>
+        `;
+      }).join('');
+
+      return `
+        <svg width="100%" height="${totalH}" viewBox="0 0 650 ${totalH}" style="display:block;margin:4px 0;">
+          <g transform="translate(185, 8)">
+            <text x="0" y="0" font-size="8.5" font-weight="700" fill="#dc2626">■ Quarantined Damaged Stock</text>
+            <text x="160" y="0" font-size="8.5" font-weight="700" fill="#0d9488">■ Sound / Saleable Batch Stock</text>
+          </g>
+          ${rows}
         </svg>
       `;
     };
@@ -821,13 +971,36 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
 
     const topProductRows = quantityByProduct.slice(0, 8).map((p, idx) => {
       const diff = p.original_quantity - p.adjusted_quantity;
+      const rate = p.shipped_quantity > 0 ? ((p.original_quantity / p.shipped_quantity) * 100).toFixed(1) : '0.0';
       return `
         <tr>
           <td style="text-align:center;font-weight:700;color:#64748b;">#${idx + 1}</td>
           <td><strong>${esc(p.product)}</strong></td>
-          <td style="text-align:right;color:#0369a1;font-weight:700;">${p.original_quantity.toLocaleString()}</td>
+          <td style="text-align:right;color:#0284c7;font-weight:700;">${p.shipped_quantity > 0 ? p.shipped_quantity.toLocaleString() : '—'}</td>
+          <td style="text-align:right;color:#dc2626;font-weight:700;">${p.original_quantity.toLocaleString()}</td>
+          <td style="text-align:right;color:#d97706;font-weight:700;">${rate}%</td>
           <td style="text-align:right;color:#15803d;font-weight:700;">${p.adjusted_quantity.toLocaleString()}</td>
           <td style="text-align:right;color:${diff > 0 ? '#b91c1c' : '#475569'};font-weight:600;">${diff > 0 ? `-${diff.toLocaleString()}` : diff === 0 ? 'Balanced' : `+${Math.abs(diff)}`}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const warehouseIncidentRows = warehouseIncidents.complaints.map((c) => {
+      const batchQty = parseInt(c.order_quantity, 10) || 0;
+      const dmgQty = parseInt(c.defect_quantity, 10) || 0;
+      const lossRate = batchQty > 0 ? ((dmgQty / batchQty) * 100).toFixed(1) : '0.0';
+      const loc = c.customer_location || 'Central Cold Room';
+      const temp = c.storage_temp ? ` (${c.storage_temp})` : '';
+      return `
+        <tr>
+          <td style="font-family:monospace;font-weight:700;color:#0f766e;">${esc(c.id)}</td>
+          <td><strong>${esc(c.product_name)}</strong></td>
+          <td><span style="display:inline-block;padding:2px 6px;background:#fef2f2;color:#991b1b;border-radius:4px;font-weight:600;font-size:9.5px;">${esc(c.defect_type)}</span></td>
+          <td>${esc(loc)}${esc(temp)}</td>
+          <td style="text-align:right;color:#334155;font-weight:700;">${batchQty.toLocaleString()}</td>
+          <td style="text-align:right;color:#dc2626;font-weight:700;">${dmgQty.toLocaleString()}</td>
+          <td style="text-align:right;color:#b91c1c;font-weight:800;">${lossRate}%</td>
+          <td><span style="display:inline-block;padding:2px 6px;background:#fef3c7;color:#92400e;border-radius:4px;font-weight:600;font-size:9.5px;">${esc(c.status)} • Quarantined</span></td>
         </tr>
       `;
     }).join('');
@@ -1071,24 +1244,24 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   <!-- Executive KPI Grid -->
   <div class="kpi-grid">
     <div class="kpi-card">
-      <div class="kpi-label">Total Complaints Logged</div>
-      <div class="kpi-val" style="color:#0f766e;">${totalComplaints}</div>
-      <div style="font-size:9px;color:#64748b;">${warehouseComplaintsCount} Internal Warehouse</div>
+      <div class="kpi-label">Customer Complaints</div>
+      <div class="kpi-val" style="color:#0284c7;">${customerTotals.count}</div>
+      <div style="font-size:9px;color:#64748b;">+ ${warehouseIncidents.count} Internal Warehouse</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">Total Ordered / Shipped</div>
-      <div class="kpi-val" style="color:#334155;">${totals.ordered.toLocaleString()} <span style="font-size:9.5px;color:#64748b;">units</span></div>
-      <div style="font-size:9px;color:#64748b;">Associated Sales Volume</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Total Defective Measure</div>
-      <div class="kpi-val" style="color:#0284c7;">${totals.defective.toLocaleString()} <span style="font-size:9.5px;color:#64748b;">units</span></div>
-      <div style="font-size:9px;color:#0284c7;font-weight:600;">QA Confirmed: ${totals.qaConfirmed.toLocaleString()}</div>
+      <div class="kpi-label">Customer Shipped Volume</div>
+      <div class="kpi-val" style="color:#0f766e;">${customerTotals.shipped.toLocaleString()} <span style="font-size:9.5px;color:#64748b;">units</span></div>
+      <div style="font-size:9px;color:#0f766e;font-weight:600;">External Deliveries</div>
     </div>
     <div class="kpi-card" style="background:#fef2f2;border-color:#fecaca;">
-      <div class="kpi-label" style="color:#991b1b;">Overall Defect Rate</div>
-      <div class="kpi-val" style="color:#b91c1c;">${totals.defectRate}%</div>
-      <div style="font-size:9px;color:#991b1b;font-weight:600;">Warehouse Exchanged: ${totals.exchanged.toLocaleString()}</div>
+      <div class="kpi-label" style="color:#991b1b;">Customer Defect Rate</div>
+      <div class="kpi-val" style="color:#b91c1c;">${customerTotals.defectRate}%</div>
+      <div style="font-size:9px;color:#991b1b;font-weight:600;">${customerTotals.defective.toLocaleString()} Claimed / ${customerTotals.exchanged.toLocaleString()} Exchanged</div>
+    </div>
+    <div class="kpi-card" style="background:#fffaf0;border-color:#fed7aa;">
+      <div class="kpi-label" style="color:#9a3412;">Internal Warehouse Loss</div>
+      <div class="kpi-val" style="color:#ea580c;">${warehouseIncidents.totalDamagedVolume.toLocaleString()} <span style="font-size:9.5px;color:#9a3412;">units</span></div>
+      <div style="font-size:9px;color:#c2410c;font-weight:600;">100% Quarantined in WH</div>
     </div>
   </div>
 
@@ -1099,8 +1272,9 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       <span style="font-size:9.5px;color:#64748b;font-weight:600;">High-Level Assessment</span>
     </div>
     <div style="font-size:10.5px;color:#334155;line-height:1.5;">
-      During the analyzed evaluation window, a total of <strong>${totalComplaints} customer and internal defect incidents</strong> were registered across <strong>${totals.ordered.toLocaleString()} ordered units</strong>, resulting in an overall claim-to-order defect rate of <strong>${totals.defectRate}%</strong>.
-      Out of the reported defect volume, laboratory and on-site QA evaluations by the <strong>QA Team</strong> confirmed <strong>${totals.qaConfirmed.toLocaleString()} defective units</strong>. Warehouse fulfillment has completed <strong>${totals.exchanged.toLocaleString()} physical replacements</strong> to safeguard customer accounts, while remaining claims progress through Stage 5 Stock Return control and Stage 6 Finance tax disposal.
+      During the analyzed evaluation window, a total of <strong>${totalComplaints} quality incidents</strong> were audited:
+      <strong>${customerTotals.count} customer quality complaints</strong> across <strong>${customerTotals.shipped.toLocaleString()} shipped units</strong> (yielding an actual customer defect rate of <strong>${customerTotals.defectRate}%</strong>), and <strong>${warehouseIncidents.count} internal facility incidents</strong> representing <strong>${warehouseIncidents.totalDamagedVolume.toLocaleString()} damaged units</strong> out of <strong>${warehouseIncidents.totalBatchVolume.toLocaleString()} audited warehouse lot units</strong>.
+      All internal warehouse damages were fully quarantined with <strong>zero customer distribution impact</strong>. Warehouse fulfillment has completed <strong>${customerTotals.exchanged.toLocaleString()} physical replacements</strong> for customer accounts, while internal quarantined stock proceeds through Stage 5 Stock Return and Stage 6 Finance tax disposal.
     </div>
   </div>
 
@@ -1188,28 +1362,28 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 3: Product Defect Volume & Exchange (With Speedometer & Bar Chart) -->
+  <!-- Section 3: Customer Complaints: QTY Shipped vs. Defective QTY (External Accounts) -->
   <div class="section-card">
     <div class="section-title">
-      <span>3. Product SKU Defect Volume & Fulfillment Impact</span>
-      <span style="font-size:9.5px;color:#64748b;font-weight:600;">Top Affected SKUs</span>
+      <span>3. Customer Quality Complaints & Shipment Defect Rate</span>
+      <span style="font-size:9.5px;color:#0284c7;font-weight:700;">External Customer Accounts (${customerTotals.count} Claims)</span>
     </div>
 
     <!-- Speedometer Gauge & Product Bar Chart Side by Side -->
     <div class="chart-box" style="display:grid;grid-template-columns:250px 1fr;gap:14px;align-items:center;">
       <div style="border-right:1px solid #e2e8f0;padding-right:10px;text-align:center;">
-        <div style="font-size:10px;font-weight:700;color:#334155;margin-bottom:4px;">Ordered vs. Defective QTY</div>
+        <div style="font-size:10px;font-weight:700;color:#334155;margin-bottom:4px;">Customer Defect Rate (${customerTotals.defectRate}%)</div>
         ${generateSpeedometerSvg()}
       </div>
       <div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <div style="font-size:10px;font-weight:700;color:#334155;">Defective QTY by Product (Initial vs Exchanged)</div>
+          <div style="font-size:10px;font-weight:700;color:#334155;">Customer Product Quality: QTY Shipped vs. Defective QTY</div>
           <div style="display:flex;gap:10px;font-size:9px;">
-            <span><span style="display:inline-block;width:9px;height:9px;background:#0ea5e9;border-radius:2px;margin-right:3px;"></span>Initial QTY</span>
-            <span><span style="display:inline-block;width:9px;height:9px;background:#16a34a;border-radius:2px;margin-right:3px;"></span>Exchanged QTY</span>
+            <span><span style="display:inline-block;width:9px;height:9px;background:#0284c7;border-radius:2px;margin-right:3px;"></span>QTY Shipped</span>
+            <span><span style="display:inline-block;width:9px;height:9px;background:#ef4444;border-radius:2px;margin-right:3px;"></span>Customer Defective QTY</span>
           </div>
         </div>
-        ${generateProductBarsSvg()}
+        ${generateCustomerShipmentBarsSvg()}
       </div>
     </div>
 
@@ -1218,9 +1392,11 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
         <tr>
           <th style="text-align:center;width:28px;">#</th>
           <th>Product Description</th>
-          <th style="text-align:right;">Claimed Defect QTY</th>
-          <th style="text-align:right;">Warehouse Exchanged QTY</th>
-          <th style="text-align:right;">Variance / Loss</th>
+          <th style="text-align:right;">QTY Shipped</th>
+          <th style="text-align:right;">Customer Defective QTY</th>
+          <th style="text-align:right;">Defect Rate (%)</th>
+          <th style="text-align:right;">Warehouse Exchanged</th>
+          <th style="text-align:right;">Unfulfilled Variance</th>
         </tr>
       </thead>
       <tbody>
@@ -1228,14 +1404,78 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       </tbody>
     </table>
     <div class="explanation-box">
-      <strong>Management Explanation:</strong> High-volume fresh milk SKUs (such as <em>2000cc Farm Fresh Ausfresh 100% Australian Milk</em>) experience the highest absolute defect volumes due to large distribution volume and shorter shelf-life sensitivity. The variance column tracks the difference between initial customer claim and warehouse replacement dispatched, ensuring stock control balances.
+      <strong>Customer Quality Analysis:</strong> Across <strong>${customerTotals.shipped.toLocaleString()} units shipped</strong> to external cafe chains and retailers, customer quality complaints totaled <strong>${customerTotals.defective.toLocaleString()} defective units</strong>, yielding a genuine customer delivery defect rate of <strong>${customerTotals.defectRate}%</strong>. Warehouse operations have fulfilled <strong>${customerTotals.exchanged.toLocaleString()} replacement units</strong>. Top customer defect volume was concentrated in <em>2000cc Farm Fresh Cows Milk</em> (21.2% defect rate, driven by transit chilling variance on Brown BKK batches).
     </div>
   </div>
 
-  <!-- Section 4: Customer Pareto Distribution (With Pareto Chart) -->
+  <!-- Section 4: Internal Warehouse Storage & Operational Defect Report (Zero Customer Exposure) -->
   <div class="section-card">
     <div class="section-title">
-      <span>4. Customer Pareto Analysis (80/20 Rule)</span>
+      <span>4. Internal Warehouse Incidents & Storage Loss Analytics</span>
+      <span style="font-size:9.5px;color:#dc2626;font-weight:700;">Internal Facility Operations (${warehouseIncidents.count} Incidents • Zero Customer Exposure)</span>
+    </div>
+
+    <!-- Warehouse KPI Summary Cards -->
+    <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;margin-bottom:10px;">
+      <div style="border:1px solid #fed7aa;border-radius:6px;padding:8px 10px;background:#fffaf0;text-align:center;">
+        <div style="font-size:8.5px;color:#9a3412;font-weight:700;text-transform:uppercase;">Warehouse Incidents</div>
+        <div style="font-size:16px;font-weight:900;color:#c2410c;margin-top:2px;">${warehouseIncidents.count} Reports</div>
+        <div style="font-size:8px;color:#78350f;">Internal facility handling</div>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;background:#f8fafc;text-align:center;">
+        <div style="font-size:8.5px;color:#64748b;font-weight:700;text-transform:uppercase;">Affected Lot Volume</div>
+        <div style="font-size:16px;font-weight:900;color:#0f172a;margin-top:2px;">${warehouseIncidents.totalBatchVolume.toLocaleString()}</div>
+        <div style="font-size:8px;color:#64748b;">Central warehouse batches</div>
+      </div>
+      <div style="border:1px solid #fecaca;border-radius:6px;padding:8px 10px;background:#fef2f2;text-align:center;">
+        <div style="font-size:8.5px;color:#991b1b;font-weight:700;text-transform:uppercase;">Damaged / Loss Volume</div>
+        <div style="font-size:16px;font-weight:900;color:#dc2626;margin-top:2px;">${warehouseIncidents.totalDamagedVolume.toLocaleString()} <span style="font-size:9px;">(${warehouseIncidents.lossRate}%)</span></div>
+        <div style="font-size:8px;color:#b91c1c;">100% Quarantined</div>
+      </div>
+      <div style="border:1px solid #a7f3d0;border-radius:6px;padding:8px 10px;background:#ecfdf5;text-align:center;">
+        <div style="font-size:8.5px;color:#065f46;font-weight:700;text-transform:uppercase;">Customer Exposure</div>
+        <div style="font-size:16px;font-weight:900;color:#059669;margin-top:2px;">0 Units (0.0%)</div>
+        <div style="font-size:8px;color:#047857;">Isolated before dispatch</div>
+      </div>
+    </div>
+
+    <!-- Visual Chart: Internal Warehouse Defect Distribution -->
+    <div class="chart-box">
+      <div style="font-size:10px;font-weight:700;color:#334155;margin-bottom:6px;">Internal Warehouse Loss Distribution (Damaged Stock vs. Sound Batch Volume)</div>
+      ${generateWarehouseLossSvg()}
+    </div>
+
+    <!-- Warehouse Incidents Table -->
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Incident Ref</th>
+          <th>Product Description</th>
+          <th>Root Cause Defect</th>
+          <th>Location & Storage Temp</th>
+          <th style="text-align:right;">Batch Volume</th>
+          <th style="text-align:right;">Damaged Units</th>
+          <th style="text-align:right;">Loss Rate (%)</th>
+          <th>Operational Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${warehouseIncidentRows}
+      </tbody>
+    </table>
+    <div class="explanation-box" style="background:#fff7ed;border-left:3.5px solid #ea580c;color:#9a3412;">
+      <strong>Warehouse Incident & Containment Report:</strong> 
+      Internal warehouse defects reflect in-facility storage and bulk handling challenges segregated entirely from customer fulfillment:
+      <br/>• <strong>Bulk Pallet Collapse (Incident FMFSM-20261105-002):</strong> 6,500 units of <em>2000cc Farm Fresh Ausfresh 100% Australian Milk</em> sustained carton crushing and seal damage due to pallet racking overload during container destuffing in Room 2 Chiller (4°C). 
+      <br/>• <strong>Cold-Room Seam Leak (Incident FMFSM-20261105-001):</strong> 5 units of <em>1000cc Chocolate Milk</em> showed seam leaks during pallet breakdown in Room 2 (3°C).
+      <br/>• <strong>Containment & Governance:</strong> All 6,505 damaged units were instantly tagged, isolated, and transferred to the quarantine staging zone. Stock is advancing through Stage 5 Stock Return QA review and Stage 6 Finance batch disposal for formal tax-deductible destruction. Zero damaged cartons were released to customers.
+    </div>
+  </div>
+
+  <!-- Section 5: Customer Pareto Distribution (With Pareto Chart) -->
+  <div class="section-card">
+    <div class="section-title">
+      <span>5. Customer Pareto Analysis (80/20 Rule)</span>
       <span style="font-size:9.5px;color:#64748b;font-weight:600;">Key Account Risk Concentration</span>
     </div>
 
@@ -1271,10 +1511,10 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 5: Manufacturing Code (EXP) & SPC Control Chart -->
+  <!-- Section 6: Manufacturing Code (EXP) & SPC Control Chart -->
   <div class="section-card">
     <div class="section-title">
-      <span>5. Manufacturing Code Distribution & Statistical Process Control (SPC)</span>
+      <span>6. Manufacturing Code Distribution & Statistical Process Control (SPC)</span>
       <span style="font-size:9.5px;color:#64748b;font-weight:600;">Process Capability</span>
     </div>
 
@@ -1345,10 +1585,10 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 6: Corrective & Preventative Actions (CAPA) -->
+  <!-- Section 7: Corrective & Preventative Actions (CAPA) -->
   <div class="section-card" style="background:#fefce8;border-color:#fde047;">
     <div class="section-title" style="color:#854d0e;border-color:#fef08a;">
-      <span>6. Strategic Quality Action Plan (CAPA)</span>
+      <span>7. Strategic Quality Action Plan (CAPA)</span>
       <span style="font-size:9.5px;color:#854d0e;font-weight:700;">Mandatory Quality Directives</span>
     </div>
     <div style="font-size:10.5px;color:#713f12;line-height:1.55;">
@@ -1668,8 +1908,8 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
         <div className="insight-card" style={{ gridColumn: '1 / -1' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
             <div>
-              <h3 className="insight-card-title">Defective quantity by product</h3>
-              <div className="insight-card-subtitle">Initial complaint quantity vs. warehouse exchanged quantity (Top 20 products, common customers only)</div>
+              <h3 className="insight-card-title">Customer Quality: QTY Shipped vs. Defective QTY by Product</h3>
+              <div className="insight-card-subtitle">Shipped order volume vs. customer defect complaints & warehouse exchanges (External customers only)</div>
             </div>
             {warehouseComplaintsCount > 0 && (
               <span
@@ -1695,24 +1935,28 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           {/* Legend */}
           <div style={{ display: 'flex', gap: 20, marginTop: 10, marginBottom: 8, fontSize: '0.78rem', alignItems: 'center' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ width: 14, height: 14, borderRadius: 3, background: '#0ea5e9', display: 'inline-block' }} />
-              Initial complaint qty
+              <span style={{ width: 14, height: 14, borderRadius: 3, background: '#0284c7', display: 'inline-block' }} />
+              QTY Shipped
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ width: 14, height: 14, borderRadius: 3, background: '#ef4444', display: 'inline-block' }} />
+              Customer Defective QTY
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 14, height: 14, borderRadius: 3, background: '#16a34a', display: 'inline-block' }} />
-              Warehouse exchanged qty
+              Warehouse Exchanged QTY
             </span>
           </div>
 
           {quantityByProduct.length > 0 ? (() => {
-            const BAR_W = 28;
-            const BAR_GAP = 4;
+            const BAR_W = 20;
+            const BAR_GAP = 3;
             const CHART_H = 220;
             const maxProdLen = Math.max(...quantityByProduct.map(p => (p.product || '').length), 15);
             const LABEL_H = Math.max(150, Math.ceil(maxProdLen * 4.5) + 20);
             const PADDING_LEFT = 42;
-            const PADDING_TOP = 16;
-            const groupW = BAR_W * 2 + BAR_GAP;
+            const PADDING_TOP = 18;
+            const groupW = BAR_W * 3 + BAR_GAP * 2;
             const minPlotWidth = 1160;
             const GROUP_GAP = Math.max(
               20,
@@ -1726,7 +1970,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
               plotRightX
             );
             const totalW = Math.max(plotRightX + 24, maxLabelRightX + 20, 400);
-            const maxVal = Math.max(...quantityByProduct.map(p => Math.max(p.original_quantity, p.adjusted_quantity)), 1);
+            const maxVal = Math.max(...quantityByProduct.map(p => Math.max(p.shipped_quantity, p.original_quantity, p.adjusted_quantity)), 1);
             // Y-axis ticks
             const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(f * maxVal));
 
@@ -1751,29 +1995,39 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                   {/* Bars + X labels */}
                   {quantityByProduct.map((item, idx) => {
                     const groupX = PADDING_LEFT + idx * (groupW + GROUP_GAP);
-                    const origH = Math.max((item.original_quantity / maxVal) * CHART_H, item.original_quantity > 0 ? 4 : 0);
+                    const shipH = Math.max((item.shipped_quantity / maxVal) * CHART_H, item.shipped_quantity > 0 ? 4 : 0);
+                    const defH = Math.max((item.original_quantity / maxVal) * CHART_H, item.original_quantity > 0 ? 4 : 0);
                     const adjH = Math.max((item.adjusted_quantity / maxVal) * CHART_H, item.adjusted_quantity > 0 ? 4 : 0);
-                    const origY = PADDING_TOP + CHART_H - origH;
+                    const shipY = PADDING_TOP + CHART_H - shipH;
+                    const defY = PADDING_TOP + CHART_H - defH;
                     const adjY = PADDING_TOP + CHART_H - adjH;
                     const labelX = groupX + groupW / 2;
                     const labelY = PADDING_TOP + CHART_H + 10;
 
                     return (
                       <g key={idx}>
-                        {/* Original qty bar */}
-                        <rect x={groupX} y={origY} width={BAR_W} height={origH} rx="3" fill="#0ea5e9">
-                          <title>{`${item.product}\nInitial: ${item.original_quantity}`}</title>
+                        {/* Shipped qty bar */}
+                        <rect x={groupX} y={shipY} width={BAR_W} height={shipH} rx="3" fill="#0284c7">
+                          <title>{`${item.product}\nShipped: ${item.shipped_quantity}`}</title>
+                        </rect>
+                        {item.shipped_quantity > 0 && (
+                          <text x={groupX + BAR_W / 2} y={shipY - 4} textAnchor="middle" fontSize="9.5" fontWeight="700" fill="#0369a1">{item.shipped_quantity}</text>
+                        )}
+
+                        {/* Customer Defective qty bar */}
+                        <rect x={groupX + BAR_W + BAR_GAP} y={defY} width={BAR_W} height={defH} rx="3" fill="#ef4444">
+                          <title>{`${item.product}\nCustomer Defective: ${item.original_quantity} (${item.defect_rate}%)`}</title>
                         </rect>
                         {item.original_quantity > 0 && (
-                          <text x={groupX + BAR_W / 2} y={origY - 4} textAnchor="middle" fontSize="10" fontWeight="700" fill="#0369a1">{item.original_quantity}</text>
+                          <text x={groupX + BAR_W + BAR_GAP + BAR_W / 2} y={defY - 4} textAnchor="middle" fontSize="9.5" fontWeight="700" fill="#dc2626">{item.original_quantity}</text>
                         )}
 
                         {/* Warehouse exchanged bar */}
-                        <rect x={groupX + BAR_W + BAR_GAP} y={adjY} width={BAR_W} height={adjH} rx="3" fill="#16a34a">
+                        <rect x={groupX + (BAR_W + BAR_GAP) * 2} y={adjY} width={BAR_W} height={adjH} rx="3" fill="#16a34a">
                           <title>{`${item.product}\nWarehouse exchanged: ${item.adjusted_quantity}`}</title>
                         </rect>
                         {item.adjusted_quantity > 0 && (
-                          <text x={groupX + BAR_W + BAR_GAP + BAR_W / 2} y={adjY - 4} textAnchor="middle" fontSize="10" fontWeight="700" fill="#15803d">{item.adjusted_quantity}</text>
+                          <text x={groupX + (BAR_W + BAR_GAP) * 2 + BAR_W / 2} y={adjY - 4} textAnchor="middle" fontSize="9.5" fontWeight="700" fill="#15803d">{item.adjusted_quantity}</text>
                         )}
 
                         {/* Rotated full product name label */}
@@ -1803,6 +2057,60 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
             </div>
           )}
         </div>
+
+        {/* Card 4B: Internal Warehouse Incidents & Storage Defect Analysis */}
+        {warehouseIncidents.count > 0 && (
+          <div className="insight-card" style={{ gridColumn: '1 / -1', background: '#fffaf0', borderColor: '#fed7aa' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              <div>
+                <h3 className="insight-card-title" style={{ color: '#9a3412', display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                  🏢 Internal Warehouse Storage Incidents & Operational Loss
+                </h3>
+                <div className="insight-card-subtitle" style={{ color: '#c2410c' }}>
+                  Facility storage, bulk container destuffing & transit handling defects (100% isolated inside warehouse — zero customer exposure)
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <span style={{ fontSize: '0.78rem', background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', padding: '3px 10px', borderRadius: 6, fontWeight: 700 }}>
+                  {warehouseIncidents.totalDamagedVolume.toLocaleString()} Damaged Units ({warehouseIncidents.lossRate}%)
+                </span>
+                <span style={{ fontSize: '0.78rem', background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0', padding: '3px 10px', borderRadius: 6, fontWeight: 700 }}>
+                  0 Customer Exposure
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+              {warehouseIncidents.complaints.map((c, idx) => {
+                const batchQty = parseInt(c.order_quantity, 10) || 0;
+                const dmgQty = parseInt(c.defect_quantity, 10) || 0;
+                const lossPct = batchQty > 0 ? ((dmgQty / batchQty) * 100).toFixed(1) : '0.0';
+                return (
+                  <div key={idx} style={{ background: '#ffffff', border: '1px solid #fed7aa', borderRadius: 8, padding: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontWeight: 800, color: '#0f766e', fontSize: '0.85rem' }}>{c.id}</span>
+                      <span style={{ fontSize: '0.72rem', background: '#fef2f2', color: '#dc2626', fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>
+                        {c.defect_type}
+                      </span>
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#0f172a', marginBottom: 6 }}>
+                      {c.product_name}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: '#475569', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, margin: '8px 0' }}>
+                      <div>Batch Lot: <strong>{batchQty.toLocaleString()} units</strong></div>
+                      <div>Damaged: <strong style={{ color: '#dc2626' }}>{dmgQty.toLocaleString()} units</strong></div>
+                      <div>Loss Rate: <strong style={{ color: '#b91c1c' }}>{lossPct}%</strong></div>
+                      <div>Temp: <strong>{c.storage_temp || 'Cold Room'}</strong></div>
+                    </div>
+                    <div style={{ fontSize: '0.75rem', background: '#f8fafc', padding: '6px 8px', borderRadius: 4, color: '#64748b' }}>
+                      Status: <strong style={{ color: '#92400e' }}>{c.status} • Quarantined</strong> (Room 2 Chiller)
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Card 5: Complaints by Customer – Pareto Chart */}
         <div className="insight-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
