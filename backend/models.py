@@ -88,7 +88,7 @@ class ComplaintCreate(ComplaintBase):
     pass
 
 class QAReviewRequest(BaseModel):
-    inspector_name: str = Field(..., example="Dr. Chanreth")
+    inspector_name: str = Field(..., example="QA Team")
     customer_storage_temperature: Optional[str] = Field(default="", example="4°C", description="Customer storage temperature measured during QA inspection")
     storage_temperature_photo_url: Optional[str] = Field(default="", example="/api/static/sample_storage_temp.svg", description="Photo proof of customer storage temperature or thermometer reading")
 
@@ -141,13 +141,13 @@ class StockReturnRequest(BaseModel):
     notes: Optional[str] = Field(default="", example="Stock inspected and quarantined")
     recorded_date: Optional[str] = Field(default="", example="2026-11-04")
     qa_signed_off: Optional[str] = Field(default="No", example="Yes", description="Yes or No QA sign-off")
-    qa_signed_off_by: Optional[str] = Field(default="", example="Dr. Chanreth")
+    qa_signed_off_by: Optional[str] = Field(default="", example="QA Team")
     qa_signed_off_date: Optional[str] = Field(default="", example="2026-11-04")
     qa_signed_off_notes: Optional[str] = Field(default="", example="")
 
 class StockReturnQASignOffRequest(BaseModel):
     signed_off: str = Field(..., example="Yes", description="Yes or No")
-    qa_name: Optional[str] = Field(default="Dr. Chanreth", example="Dr. Chanreth")
+    qa_name: Optional[str] = Field(default="QA Team", example="QA Team")
     notes: Optional[str] = Field(default="", example="QA verified physical return")
 
 class DisposalRequest(BaseModel):

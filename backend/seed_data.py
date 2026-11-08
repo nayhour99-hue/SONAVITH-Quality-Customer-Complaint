@@ -62,7 +62,7 @@ def get_current_seed_complaints():
             "status": "Pending approval",
             "created_at": f"{week_str}T10:15:00",
             "qa_review": {
-                "inspector_name": "Dr. Chanreth",
+                "inspector_name": "QA Team",
                 "customer_storage_temperature": "4.0°C",
                 "storage_temperature_photo_url": "/api/static/sample_storage_temp.svg",
                 "confirmed_defect_quantity": 12,
@@ -92,7 +92,7 @@ def get_current_seed_complaints():
             "status": "Approved",
             "created_at": f"{month_str}T14:20:00",
             "qa_review": {
-                "inspector_name": "Dr. Chanreth",
+                "inspector_name": "QA Team",
                 "customer_storage_temperature": "3.8°C",
                 "storage_temperature_photo_url": "/api/static/sample_storage_temp.svg",
                 "confirmed_defect_quantity": 5,

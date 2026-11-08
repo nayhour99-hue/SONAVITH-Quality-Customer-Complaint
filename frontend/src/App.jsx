@@ -269,7 +269,7 @@ export default function App() {
     try {
       await submitStockReturnSignOff(id, {
         signed_off: signedOffVal,
-        qa_name: 'Dr. Chanreth',
+        qa_name: 'QA Team',
         notes: signedOffVal === 'Yes' ? 'QA confirmed physical return' : 'QA requested warehouse adjustments',
       });
       showToast(`QA Signed Off marked "${signedOffVal}" for ${id}`);

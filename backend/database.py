@@ -814,7 +814,7 @@ def update_stock_return_qa_signoff(complaint_id: str, signoff_data: Dict[str, An
             curr_sr = {}
     signed_off_val = signoff_data.get("signed_off", "No")
     curr_sr["qa_signed_off"] = signed_off_val
-    curr_sr["qa_signed_off_by"] = signoff_data.get("qa_name", "Dr. Chanreth")
+    curr_sr["qa_signed_off_by"] = signoff_data.get("qa_name", "QA Team")
     curr_sr["qa_signed_off_date"] = signoff_data.get("date", datetime.now().strftime("%Y-%m-%d"))
     if "notes" in signoff_data:
         curr_sr["qa_signed_off_notes"] = signoff_data.get("notes", "")

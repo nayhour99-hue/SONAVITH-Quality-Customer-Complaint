@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Printer, Presentation, FileDown } from 'lucide-react';
-import pptxgen from 'pptxgenjs';
+import { Printer } from 'lucide-react';
 
 // Helpers for Control Chart
 const STATUS_STYLES = {
@@ -503,7 +502,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   }, [filteredComplaints]);
 
   // ---------------------------------------------------------------------------
-  // 1. Print Executive Insights Report (PDF / Printable View with Explanations)
+  // 1. Print Executive Insights Report (PDF / Printable View with ALL Charts)
   // ---------------------------------------------------------------------------
   const handlePrintInsightsReport = () => {
     const esc = (val) =>
@@ -514,7 +513,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
 
-    const printWin = window.open('', '_blank', 'width=1040,height=900');
+    const printWin = window.open('', '_blank', 'width=1080,height=920');
     if (!printWin) {
       window.print();
       return;
@@ -526,7 +525,265 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       day: 'numeric',
     });
 
-    // Top defect intake vs QA confirmed rows
+    // -------------------------------------------------------------------------
+    // Chart SVG Generators for High-Resolution Vector Print / PDF Output
+    // -------------------------------------------------------------------------
+
+    // 1. Status Breakdown Bars Chart (HTML/SVG)
+    const statusBarsHtml = statusBreakdown.map((item) => {
+      const styleConfig = STATUS_STYLES[item.status] || { fill: '#64748b', dot: '#94a3b8' };
+      const pct = ((item.count / (totalComplaints || 1)) * 100).toFixed(1);
+      const barWidth = Math.max((item.count / maxStatus) * 100, item.count > 0 ? 3 : 0);
+      return `
+        <div style="display:flex;align-items:center;font-size:10.5px;margin-bottom:6px;">
+          <span style="width:130px;color:#334155;font-weight:600;display:flex;align-items:center;gap:6px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${styleConfig.dot};flex-shrink:0;"></span>
+            <span>${esc(item.status)}</span>
+          </span>
+          <div style="flex:1;height:12px;background:#f1f5f9;border-radius:3px;overflow:hidden;margin:0 10px;">
+            <div style="width:${barWidth}%;height:100%;background:${styleConfig.fill};border-radius:3px;"></div>
+          </div>
+          <span style="width:70px;text-align:right;font-weight:700;color:#0f172a;">${item.count} <span style="font-weight:500;color:#64748b;font-size:9.5px;">(${pct}%)</span></span>
+        </div>
+      `;
+    }).join('');
+
+    // 2. Donut Chart Generator
+    const generateDonutSvg = (slices, centerTotal, centerLabel) => {
+      const r = 45;
+      const circles = (slices || []).map((s) => `
+        <circle cx="60" cy="60" r="${r}" fill="none" stroke="${s.color}" stroke-width="16"
+          stroke-dasharray="${s.strokeDasharray}" stroke-dashoffset="${s.strokeDashoffset}"
+          style="transform: rotate(-90deg); transform-origin: 50% 50%;" />
+      `).join('');
+      return `
+        <svg width="115" height="115" viewBox="0 0 120 120" style="display:block;flex-shrink:0;">
+          <circle cx="60" cy="60" r="${r}" fill="none" stroke="#f1f5f9" stroke-width="16" />
+          ${circles}
+          <text x="60" y="58" text-anchor="middle" font-size="16" font-weight="800" fill="#0f172a">${centerTotal}</text>
+          <text x="60" y="71" text-anchor="middle" font-size="8" font-weight="600" fill="#64748b">${centerLabel}</text>
+        </svg>
+      `;
+    };
+
+    // 3. Speedometer Gauge Generator
+    const generateSpeedometerSvg = () => {
+      const maxScale = Math.max(totals.ordered, totals.defective, 1);
+      const ratio = Math.min(Math.max(totals.defective / maxScale, 0), 1);
+      const cx = 130;
+      const cy = 100;
+      const rArc = 70;
+      const rTickText = 50;
+      const startDeg = 135;
+      const sweepDeg = 270;
+      const endDeg = startDeg + sweepDeg;
+      const currentDeg = startDeg + ratio * sweepDeg;
+
+      const toRad = (deg) => (deg * Math.PI) / 180;
+      const polarToCartesian = (centerX, centerY, radiusVal, angleInDegrees) => {
+        const rad = toRad(angleInDegrees);
+        return {
+          x: centerX + radiusVal * Math.cos(rad),
+          y: centerY + radiusVal * Math.sin(rad),
+        };
+      };
+
+      const describeArc = (x, y, radiusVal, startAngle, endAngle) => {
+        const start = polarToCartesian(x, y, radiusVal, startAngle);
+        const end = polarToCartesian(x, y, radiusVal, endAngle);
+        const diff = endAngle - startAngle;
+        const largeArcFlag = diff <= 180 ? '0' : '1';
+        return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${radiusVal} ${radiusVal} 0 ${largeArcFlag} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+      };
+
+      const tickCount = 6;
+      const ticks = Array.from({ length: tickCount + 1 }, (_, i) => {
+        const frac = i / tickCount;
+        const deg = startDeg + frac * sweepDeg;
+        const val = Math.round(frac * maxScale);
+        const pos = polarToCartesian(cx, cy, rTickText, deg);
+        const formattedVal = val >= 10000 ? `${(val / 1000).toFixed(1).replace(/\\.0$/, '')}k` : val.toLocaleString();
+        return `<text x="${pos.x.toFixed(1)}" y="${(pos.y + 3.5).toFixed(1)}" text-anchor="middle" font-size="8" font-weight="700" fill="#64748b">${formattedVal}</text>`;
+      }).join('');
+
+      return `
+        <svg width="220" height="155" viewBox="0 0 260 175" style="display:block;margin:0 auto;">
+          <defs>
+            <linearGradient id="printSpeedoGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#0284c7" />
+              <stop offset="50%" stop-color="#06b6d4" />
+              <stop offset="100%" stop-color="#10b981" />
+            </linearGradient>
+            <linearGradient id="printNeedleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#94a3b8" />
+              <stop offset="100%" stop-color="#0f172a" />
+            </linearGradient>
+          </defs>
+          <path d="${describeArc(cx, cy, rArc, startDeg, endDeg)}" fill="none" stroke="#e2e8f0" stroke-width="12" />
+          ${ratio > 0.002 ? `<path d="${describeArc(cx, cy, rArc, startDeg, Math.max(currentDeg, startDeg + 2))}" fill="none" stroke="url(#printSpeedoGrad)" stroke-width="12" />` : ''}
+          ${ticks}
+          <g transform="translate(${cx}, ${cy}) rotate(${currentDeg.toFixed(2)})">
+            <polygon points="5,-3.5 54,-1.2 54,1.2 5,3.5" fill="url(#printNeedleGrad)" />
+          </g>
+          <circle cx="${cx}" cy="${cy}" r="4.5" fill="#0f172a" />
+          <text x="${cx}" y="142" text-anchor="middle" font-size="20" font-weight="800" fill="#0f172a">${totals.defective.toLocaleString()}</text>
+          <text x="${cx}" y="156" text-anchor="middle" font-size="9" font-weight="700" fill="#0f766e">Defective QTY (${totals.defectRate}%)</text>
+        </svg>
+      `;
+    };
+
+    // 4. Product Grouped Bar Chart SVG
+    const generateProductBarsSvg = () => {
+      const topProds = quantityByProduct.slice(0, 8);
+      if (topProds.length === 0) return '';
+      const BAR_W = 20;
+      const BAR_GAP = 3;
+      const GROUP_GAP = 22;
+      const CHART_H = 140;
+      const PADDING_LEFT = 36;
+      const PADDING_TOP = 14;
+      const groupW = BAR_W * 2 + BAR_GAP;
+      const totalW = PADDING_LEFT + topProds.length * (groupW + GROUP_GAP);
+      const maxVal = Math.max(...topProds.map(p => Math.max(p.original_quantity, p.adjusted_quantity)), 1);
+
+      const yTicks = [0, 0.5, 1].map(f => Math.round(f * maxVal));
+      const gridlines = yTicks.map(tick => {
+        const y = PADDING_TOP + CHART_H - (tick / maxVal) * CHART_H;
+        return `
+          <line x1="${PADDING_LEFT}" y1="${y}" x2="${totalW}" y2="${y}" stroke="#e2e8f0" stroke-width="1" />
+          <text x="${PADDING_LEFT - 4}" y="${y + 3}" text-anchor="end" font-size="8.5" fill="#64748b">${tick}</text>
+        `;
+      }).join('');
+
+      const bars = topProds.map((item, idx) => {
+        const groupX = PADDING_LEFT + idx * (groupW + GROUP_GAP);
+        const origH = Math.max((item.original_quantity / maxVal) * CHART_H, item.original_quantity > 0 ? 3 : 0);
+        const adjH = Math.max((item.adjusted_quantity / maxVal) * CHART_H, item.adjusted_quantity > 0 ? 3 : 0);
+        const origY = PADDING_TOP + CHART_H - origH;
+        const adjY = PADDING_TOP + CHART_H - adjH;
+        const labelX = groupX + groupW / 2;
+        const shortName = item.product.length > 22 ? item.product.slice(0, 22) + '...' : item.product;
+
+        return `
+          <g>
+            <rect x="${groupX}" y="${origY}" width="${BAR_W}" height="${origH}" rx="2" fill="#0ea5e9" />
+            <text x="${groupX + BAR_W / 2}" y="${origY - 3}" text-anchor="middle" font-size="8" font-weight="700" fill="#0369a1">${item.original_quantity}</text>
+            <rect x="${groupX + BAR_W + BAR_GAP}" y="${adjY}" width="${BAR_W}" height="${adjH}" rx="2" fill="#16a34a" />
+            <text x="${groupX + BAR_W + BAR_GAP + BAR_W / 2}" y="${adjY - 3}" text-anchor="middle" font-size="8" font-weight="700" fill="#15803d">${item.adjusted_quantity}</text>
+            <text transform="translate(${labelX}, ${PADDING_TOP + CHART_H + 8}) rotate(35)" text-anchor="start" font-size="9" fill="#334155">${esc(shortName)}</text>
+          </g>
+        `;
+      }).join('');
+
+      return `
+        <svg width="100%" height="225" viewBox="0 0 ${Math.max(totalW + 60, 480)} 225" style="display:block;">
+          ${gridlines}
+          ${bars}
+          <line x1="${PADDING_LEFT}" y1="${PADDING_TOP + CHART_H}" x2="${totalW}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1.5" />
+          <line x1="${PADDING_LEFT}" y1="${PADDING_TOP}" x2="${PADDING_LEFT}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1.5" />
+        </svg>
+      `;
+    };
+
+    // 5. Customer Pareto Chart SVG
+    const generateParetoSvg = () => {
+      const topCust = customerComplaints.slice(0, 10);
+      if (topCust.length === 0) return '';
+      const BAR_W = 28;
+      const BAR_GAP = 12;
+      const CHART_H = 135;
+      const PADDING_LEFT = 36;
+      const PADDING_RIGHT = 38;
+      const PADDING_TOP = 16;
+      const totalCust = topCust.reduce((s, c) => s + c.count, 0) || 1;
+      const maxCount = topCust[0]?.count || 1;
+      const plotRightX = PADDING_LEFT + topCust.length * (BAR_W + BAR_GAP) - BAR_GAP;
+      const totalW = plotRightX + PADDING_RIGHT;
+
+      let cum = 0;
+      const cumPoints = topCust.map((c, i) => {
+        cum += c.count;
+        const cumPct = (cum / totalCust) * 100;
+        const x = PADDING_LEFT + i * (BAR_W + BAR_GAP) + BAR_W / 2;
+        const y = PADDING_TOP + CHART_H - (cumPct / 100) * CHART_H;
+        return { x, y, cumPct };
+      });
+
+      const y80 = PADDING_TOP + CHART_H - 0.8 * CHART_H;
+      const bars = topCust.map((item, idx) => {
+        const barH = Math.max((item.count / maxCount) * CHART_H, 3);
+        const x = PADDING_LEFT + idx * (BAR_W + BAR_GAP);
+        const y = PADDING_TOP + CHART_H - barH;
+        const shortName = item.name.length > 20 ? item.name.slice(0, 20) + '...' : item.name;
+        return `
+          <rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" rx="2" fill="#0284c7" />
+          <text x="${x + BAR_W / 2}" y="${y - 3}" text-anchor="middle" font-size="8.5" font-weight="700" fill="#0369a1">${item.count}</text>
+          <text transform="translate(${x + BAR_W / 2}, ${PADDING_TOP + CHART_H + 8}) rotate(35)" text-anchor="start" font-size="9" fill="#334155">${esc(shortName)}</text>
+        `;
+      }).join('');
+
+      const polyPoints = cumPoints.map(p => `${p.x},${p.y}`).join(' ');
+      const dots = cumPoints.map(p => `
+        <circle cx="${p.x}" cy="${p.y}" r="3" fill="#d97706" stroke="#fff" stroke-width="1" />
+        <text x="${p.x}" y="${p.y - 5}" text-anchor="middle" font-size="7.5" font-weight="700" fill="#92400e">${p.cumPct.toFixed(0)}%</text>
+      `).join('');
+
+      return `
+        <svg width="100%" height="225" viewBox="0 0 ${Math.max(totalW + 50, 480)} 225" style="display:block;">
+          <line x1="${PADDING_LEFT}" y1="${PADDING_TOP + CHART_H}" x2="${plotRightX}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1.5" />
+          <line x1="${PADDING_LEFT}" y1="${PADDING_TOP}" x2="${PADDING_LEFT}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1.5" />
+          <line x1="${plotRightX}" y1="${PADDING_TOP}" x2="${plotRightX}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3 2" />
+          <line x1="${PADDING_LEFT}" y1="${y80}" x2="${plotRightX}" y2="${y80}" stroke="#d97706" stroke-width="1" stroke-dasharray="3 3" />
+          <text x="${plotRightX + 4}" y="${y80 + 3}" font-size="8" fill="#d97706" font-weight="700">80%</text>
+          ${bars}
+          <polyline points="${polyPoints}" fill="none" stroke="#d97706" stroke-width="2" />
+          ${dots}
+        </svg>
+      `;
+    };
+
+    // 6. Control Chart (c-Chart) SVG
+    const generateControlChartSvg = () => {
+      const dataPoints = controlChartData.data.slice(0, 16);
+      if (dataPoints.length === 0) return '';
+      const CHART_H = 120;
+      const PADDING_LEFT = 36;
+      const PADDING_RIGHT = 36;
+      const PADDING_TOP = 16;
+      const totalW = 460;
+      const maxY = Math.max(controlChartData.ucl, ...dataPoints.map(d => d.count), 1) * 1.15;
+
+      const yUcl = PADDING_TOP + CHART_H - (controlChartData.ucl / maxY) * CHART_H;
+      const yMean = PADDING_TOP + CHART_H - (controlChartData.mean / maxY) * CHART_H;
+      const yLcl = PADDING_TOP + CHART_H - (controlChartData.lcl / maxY) * CHART_H;
+
+      const pts = dataPoints.map((p, i) => {
+        const x = PADDING_LEFT + ((i + 0.5) / dataPoints.length) * (totalW - PADDING_LEFT - PADDING_RIGHT);
+        const y = PADDING_TOP + CHART_H - (p.count / maxY) * CHART_H;
+        return { x, y, count: p.count, period: p.period, outOfControl: p.outOfControl };
+      });
+
+      const polyPoints = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+      const circles = pts.map(p => `
+        <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="${p.outOfControl ? '#ef4444' : '#0f172a'}" />
+        <text x="${p.x.toFixed(1)}" y="${(p.y - 4).toFixed(1)}" text-anchor="middle" font-size="7.5" font-weight="700" fill="${p.outOfControl ? '#dc2626' : '#334155'}">${p.count}</text>
+      `).join('');
+
+      return `
+        <svg width="100%" height="165" viewBox="0 0 ${totalW} 165" style="display:block;">
+          <line x1="${PADDING_LEFT}" y1="${PADDING_TOP + CHART_H}" x2="${totalW - PADDING_RIGHT}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1.5" />
+          <line x1="${PADDING_LEFT}" y1="${PADDING_TOP}" x2="${PADDING_LEFT}" y2="${PADDING_TOP + CHART_H}" stroke="#cbd5e1" stroke-width="1.5" />
+          <line x1="${PADDING_LEFT}" y1="${yUcl.toFixed(1)}" x2="${totalW - PADDING_RIGHT}" y2="${yUcl.toFixed(1)}" stroke="#ef4444" stroke-width="1" stroke-dasharray="3 3" />
+          <text x="${totalW - PADDING_RIGHT + 4}" y="${(yUcl + 3).toFixed(1)}" font-size="8" fill="#ef4444" font-weight="700">UCL (${controlChartData.ucl.toFixed(1)})</text>
+          <line x1="${PADDING_LEFT}" y1="${yMean.toFixed(1)}" x2="${totalW - PADDING_RIGHT}" y2="${yMean.toFixed(1)}" stroke="#3b82f6" stroke-width="1" stroke-dasharray="3 3" />
+          <text x="${totalW - PADDING_RIGHT + 4}" y="${(yMean + 3).toFixed(1)}" font-size="8" fill="#3b82f6" font-weight="700">Mean (${controlChartData.mean.toFixed(1)})</text>
+          <polyline points="${polyPoints}" fill="none" stroke="#64748b" stroke-width="1.8" />
+          ${circles}
+        </svg>
+      `;
+    };
+
+    // Table rows data
     const topDefectRows = defectTypes.slice(0, 8).map((d) => {
       const qaMatch = qaDefectTypes.items.find((q) => q.name === d.name);
       return `
@@ -540,8 +797,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       `;
     }).join('');
 
-    // Product rows
-    const topProductRows = quantityByProduct.slice(0, 10).map((p, idx) => {
+    const topProductRows = quantityByProduct.slice(0, 8).map((p, idx) => {
       const diff = p.original_quantity - p.adjusted_quantity;
       return `
         <tr>
@@ -554,10 +810,9 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       `;
     }).join('');
 
-    // Customer Pareto rows
     const totalCustCount = customerComplaints.reduce((s, c) => s + c.count, 0) || 1;
     let cumRun = 0;
-    const topCustomerRows = customerComplaints.slice(0, 10).map((c, idx) => {
+    const topCustomerRows = customerComplaints.slice(0, 8).map((c, idx) => {
       cumRun += c.count;
       const cumPct = ((cumRun / totalCustCount) * 100).toFixed(1);
       const isUnder80 = parseFloat(cumPct) <= 80.0 || (idx === 0);
@@ -572,7 +827,6 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       `;
     }).join('');
 
-    // Manufacturing Code rows
     const mfgRows = mfgSummary.map((m) => {
       const totalMfg = mfgSummary.reduce((s, i) => s + i.count, 0) || 1;
       const pct = ((m.count / totalMfg) * 100).toFixed(1);
@@ -598,7 +852,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       color: #0f172a;
       margin: 0;
       padding: 16px;
-      font-size: 11.5px;
+      font-size: 11px;
       line-height: 1.45;
       background: #ffffff;
     }
@@ -637,20 +891,20 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       align-items: flex-start;
     }
     .brand-title {
-      font-size: 17px;
+      font-size: 16.5px;
       font-weight: 900;
       color: #0f766e;
       letter-spacing: 0.03em;
       margin: 0 0 2px 0;
     }
     .report-title {
-      font-size: 14px;
+      font-size: 13.5px;
       font-weight: 700;
       color: #0f172a;
       margin: 0;
     }
     .report-sub {
-      font-size: 10.5px;
+      font-size: 10px;
       color: #64748b;
       margin-top: 3px;
     }
@@ -668,14 +922,14 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       text-align: center;
     }
     .kpi-label {
-      font-size: 9.5px;
+      font-size: 9px;
       color: #64748b;
       text-transform: uppercase;
       font-weight: 700;
       letter-spacing: 0.04em;
     }
     .kpi-val {
-      font-size: 18px;
+      font-size: 17px;
       font-weight: 900;
       color: #0f172a;
       margin-top: 2px;
@@ -684,12 +938,12 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       border: 1px solid #cbd5e1;
       border-radius: 8px;
       padding: 12px 14px;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
       background: #ffffff;
       page-break-inside: avoid;
     }
     .section-title {
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 800;
       color: #0f766e;
       border-bottom: 1px solid #e2e8f0;
@@ -705,21 +959,25 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       border-radius: 4px;
       padding: 7px 11px;
       margin: 8px 0 6px 0;
-      font-size: 11px;
+      font-size: 10.5px;
       color: #134e4a;
       line-height: 1.45;
     }
-    .explanation-box strong {
-      color: #042f2e;
+    .chart-box {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 10px;
+      margin: 8px 0;
     }
     table.data-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 11px;
+      font-size: 10.5px;
       margin: 6px 0;
     }
     table.data-table th, table.data-table td {
-      padding: 6px 9px;
+      padding: 5px 8px;
       border: 1px solid #e2e8f0;
       text-align: left;
     }
@@ -732,7 +990,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       display: grid;
       grid-template-columns: repeat(4, 1fr);
       gap: 12px;
-      margin-top: 20px;
+      margin-top: 18px;
       page-break-inside: avoid;
     }
     .sig-box {
@@ -743,15 +1001,15 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       background: #fafafa;
     }
     .sig-role {
-      font-size: 10px;
+      font-size: 9.5px;
       font-weight: 700;
       color: #334155;
-      margin-bottom: 32px;
+      margin-bottom: 28px;
     }
     .sig-line {
       border-top: 1px dashed #94a3b8;
       padding-top: 4px;
-      font-size: 10px;
+      font-size: 9.5px;
       font-weight: 600;
       color: #0f172a;
     }
@@ -776,7 +1034,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       </div>
     </div>
     <div style="text-align:right;">
-      <span style="display:inline-block;padding:3px 10px;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;border-radius:999px;font-weight:800;font-size:10px;">
+      <span style="display:inline-block;padding:3px 10px;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;border-radius:999px;font-weight:800;font-size:9.5px;">
         CONFIDENTIAL • QA EXECUTIVE REPORT
       </span>
       <div class="report-sub" style="margin-top:4px;">Unified 6-Stage Quality Assurance</div>
@@ -788,43 +1046,50 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     <div class="kpi-card">
       <div class="kpi-label">Total Complaints Logged</div>
       <div class="kpi-val" style="color:#0f766e;">${totalComplaints}</div>
-      <div style="font-size:9.5px;color:#64748b;">${warehouseComplaintsCount} Internal Warehouse</div>
+      <div style="font-size:9px;color:#64748b;">${warehouseComplaintsCount} Internal Warehouse</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Total Ordered / Shipped</div>
-      <div class="kpi-val" style="color:#334155;">${totals.ordered.toLocaleString()} <span style="font-size:10px;color:#64748b;">units</span></div>
-      <div style="font-size:9.5px;color:#64748b;">Associated Sales Volume</div>
+      <div class="kpi-val" style="color:#334155;">${totals.ordered.toLocaleString()} <span style="font-size:9.5px;color:#64748b;">units</span></div>
+      <div style="font-size:9px;color:#64748b;">Associated Sales Volume</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Total Defective Measure</div>
-      <div class="kpi-val" style="color:#0284c7;">${totals.defective.toLocaleString()} <span style="font-size:10px;color:#64748b;">units</span></div>
-      <div style="font-size:9.5px;color:#0284c7;font-weight:600;">QA Confirmed: ${totals.qaConfirmed.toLocaleString()}</div>
+      <div class="kpi-val" style="color:#0284c7;">${totals.defective.toLocaleString()} <span style="font-size:9.5px;color:#64748b;">units</span></div>
+      <div style="font-size:9px;color:#0284c7;font-weight:600;">QA Confirmed: ${totals.qaConfirmed.toLocaleString()}</div>
     </div>
     <div class="kpi-card" style="background:#fef2f2;border-color:#fecaca;">
       <div class="kpi-label" style="color:#991b1b;">Overall Defect Rate</div>
       <div class="kpi-val" style="color:#b91c1c;">${totals.defectRate}%</div>
-      <div style="font-size:9.5px;color:#991b1b;font-weight:600;">Warehouse Exchanged: ${totals.exchanged.toLocaleString()}</div>
+      <div style="font-size:9px;color:#991b1b;font-weight:600;">Warehouse Exchanged: ${totals.exchanged.toLocaleString()}</div>
     </div>
   </div>
 
-  <!-- Executive Summary & Narrative Explanation -->
+  <!-- Executive Summary -->
   <div class="section-card" style="background:#f8fafc;">
     <div class="section-title">
       <span>Executive Summary & Overall Quality Health</span>
-      <span style="font-size:10px;color:#64748b;font-weight:600;">High-Level Assessment</span>
+      <span style="font-size:9.5px;color:#64748b;font-weight:600;">High-Level Assessment</span>
     </div>
-    <div style="font-size:11px;color:#334155;line-height:1.5;">
+    <div style="font-size:10.5px;color:#334155;line-height:1.5;">
       During the analyzed evaluation window, a total of <strong>${totalComplaints} customer and internal defect incidents</strong> were registered across <strong>${totals.ordered.toLocaleString()} ordered units</strong>, resulting in an overall claim-to-order defect rate of <strong>${totals.defectRate}%</strong>.
-      Out of the reported defect volume, laboratory and on-site QA evaluations confirmed <strong>${totals.qaConfirmed.toLocaleString()} defective units</strong>. Warehouse fulfillment has completed <strong>${totals.exchanged.toLocaleString()} physical replacements</strong> to safeguard customer accounts, while remaining claims progress through Stage 5 Stock Return control and Stage 6 Finance tax disposal.
+      Out of the reported defect volume, laboratory and on-site QA evaluations by the <strong>QA Team</strong> confirmed <strong>${totals.qaConfirmed.toLocaleString()} defective units</strong>. Warehouse fulfillment has completed <strong>${totals.exchanged.toLocaleString()} physical replacements</strong> to safeguard customer accounts, while remaining claims progress through Stage 5 Stock Return control and Stage 6 Finance tax disposal.
     </div>
   </div>
 
-  <!-- Section 1: Workflow Stages & Resolution Pipeline -->
+  <!-- Section 1: Workflow Stages & Resolution Pipeline (With Status Bar Chart) -->
   <div class="section-card">
     <div class="section-title">
       <span>1. Workflow Pipeline & Operational Backlog</span>
-      <span style="font-size:10px;color:#64748b;font-weight:600;">6-Stage Governance</span>
+      <span style="font-size:9.5px;color:#64748b;font-weight:600;">6-Stage Governance</span>
     </div>
+    
+    <!-- Visual Status Bars Chart -->
+    <div class="chart-box">
+      <div style="font-size:10px;font-weight:700;color:#334155;margin-bottom:8px;">Status Breakdown (Workflow Stages Visual Chart)</div>
+      ${statusBarsHtml}
+    </div>
+
     <table class="data-table">
       <thead>
         <tr>
@@ -843,7 +1108,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
               <td><strong>${esc(s.status)}</strong></td>
               <td style="text-align:right;font-weight:700;">${s.count}</td>
               <td style="text-align:right;color:#0369a1;font-weight:600;">${pct}%</td>
-              <td>${s.status.includes('QA') ? 'Quality Assurance (Dr. Chanreth)' : s.status.includes('approval') ? 'Executive Office (CEO)' : s.status === 'Approved' ? 'Warehouse Dispatch' : s.status === 'Completed' ? 'Stock Return Control' : s.status === 'Closed' ? 'Finance & Tax Write-Off' : 'Operations'}</td>
+              <td>${s.status.includes('QA') ? 'Quality Assurance (QA Team)' : s.status.includes('approval') ? 'Executive Office (CEO)' : s.status === 'Approved' ? 'Warehouse Dispatch' : s.status === 'Completed' ? 'Stock Return Control' : s.status === 'Closed' ? 'Finance & Tax Write-Off' : 'Operations'}</td>
               <td>${s.status === 'Closed' ? 'Disposed & tax verified' : s.status === 'Completed' ? 'Warehouse exchanged, return under review' : s.status === 'Pending approval' ? 'QA inspected, awaiting CEO decision' : s.status === 'Pending QA' ? 'Awaiting laboratory inspection' : 'Archived'}</td>
             </tr>
           `;
@@ -855,12 +1120,25 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 2: Defect Root Causes (Claimed vs. QA Confirmed) -->
+  <!-- Section 2: Defect Root Causes (With Dual Donut Charts) -->
   <div class="section-card">
     <div class="section-title">
       <span>2. Defect Classification & Root Cause Analysis</span>
-      <span style="font-size:10px;color:#64748b;font-weight:600;">Sales Intake vs. QA Verification</span>
+      <span style="font-size:9.5px;color:#64748b;font-weight:600;">Sales Intake vs. QA Verification</span>
     </div>
+
+    <!-- Dual Donut Charts: Intake vs QA Confirmed -->
+    <div class="chart-box" style="display:flex;justify-content:space-around;align-items:center;flex-wrap:wrap;gap:12px;">
+      <div style="text-align:center;">
+        <div style="font-size:10px;font-weight:700;color:#334155;margin-bottom:6px;">Top Defect Types (Initial Intake)</div>
+        ${generateDonutSvg(defectDonutSlices, totalComplaints, 'total')}
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:10px;font-weight:700;color:#0f766e;margin-bottom:6px;">Confirmed Defect Types (QA Team)</div>
+        ${generateDonutSvg(qaDefectDonutSlices, qaDefectTypes.totalConfirmed, 'confirmed')}
+      </div>
+    </div>
+
     <table class="data-table">
       <thead>
         <tr>
@@ -883,16 +1161,35 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 3: Product Defect Volume & Exchange Fulfillment -->
+  <!-- Section 3: Product Defect Volume & Exchange (With Speedometer & Bar Chart) -->
   <div class="section-card">
     <div class="section-title">
       <span>3. Product SKU Defect Volume & Fulfillment Impact</span>
-      <span style="font-size:10px;color:#64748b;font-weight:600;">Top Affected SKUs</span>
+      <span style="font-size:9.5px;color:#64748b;font-weight:600;">Top Affected SKUs</span>
     </div>
+
+    <!-- Speedometer Gauge & Product Bar Chart Side by Side -->
+    <div class="chart-box" style="display:grid;grid-template-columns:250px 1fr;gap:14px;align-items:center;">
+      <div style="border-right:1px solid #e2e8f0;padding-right:10px;text-align:center;">
+        <div style="font-size:10px;font-weight:700;color:#334155;margin-bottom:4px;">Ordered vs. Defective QTY</div>
+        ${generateSpeedometerSvg()}
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <div style="font-size:10px;font-weight:700;color:#334155;">Defective QTY by Product (Initial vs Exchanged)</div>
+          <div style="display:flex;gap:10px;font-size:9px;">
+            <span><span style="display:inline-block;width:9px;height:9px;background:#0ea5e9;border-radius:2px;margin-right:3px;"></span>Initial QTY</span>
+            <span><span style="display:inline-block;width:9px;height:9px;background:#16a34a;border-radius:2px;margin-right:3px;"></span>Exchanged QTY</span>
+          </div>
+        </div>
+        ${generateProductBarsSvg()}
+      </div>
+    </div>
+
     <table class="data-table">
       <thead>
         <tr>
-          <th style="text-align:center;width:30px;">#</th>
+          <th style="text-align:center;width:28px;">#</th>
           <th>Product Description</th>
           <th style="text-align:right;">Claimed Defect QTY</th>
           <th style="text-align:right;">Warehouse Exchanged QTY</th>
@@ -908,16 +1205,30 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 4: Customer Pareto Distribution (80/20 Rule) -->
+  <!-- Section 4: Customer Pareto Distribution (With Pareto Chart) -->
   <div class="section-card">
     <div class="section-title">
       <span>4. Customer Pareto Analysis (80/20 Rule)</span>
-      <span style="font-size:10px;color:#64748b;font-weight:600;">Key Account Risk Concentration</span>
+      <span style="font-size:9.5px;color:#64748b;font-weight:600;">Key Account Risk Concentration</span>
     </div>
+
+    <!-- Visual Customer Pareto Chart with 80% line -->
+    <div class="chart-box">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <div style="font-size:10px;font-weight:700;color:#334155;">Pareto Curve — Frequency of Claims & Cumulative % (Top Accounts)</div>
+        <div style="display:flex;gap:12px;font-size:9px;">
+          <span><span style="display:inline-block;width:9px;height:9px;background:#0284c7;border-radius:2px;margin-right:3px;"></span>Claim Count</span>
+          <span><span style="display:inline-block;width:14px;height:2px;background:#d97706;vertical-align:middle;margin-right:3px;"></span>Cumulative %</span>
+          <span><span style="display:inline-block;width:14px;height:1px;background:#d97706;border-top:1px dashed #d97706;vertical-align:middle;margin-right:3px;"></span>80% Threshold</span>
+        </div>
+      </div>
+      ${generateParetoSvg()}
+    </div>
+
     <table class="data-table">
       <thead>
         <tr>
-          <th style="text-align:center;width:30px;">#</th>
+          <th style="text-align:center;width:28px;">#</th>
           <th>Customer Account Name</th>
           <th style="text-align:right;">Complaint Count</th>
           <th style="text-align:right;">Account Share (%)</th>
@@ -933,12 +1244,31 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 5: Manufacturing Code (EXP) & Statistical Process Control -->
+  <!-- Section 5: Manufacturing Code (EXP) & SPC Control Chart -->
   <div class="section-card">
     <div class="section-title">
       <span>5. Manufacturing Code Distribution & Statistical Process Control (SPC)</span>
-      <span style="font-size:10px;color:#64748b;font-weight:600;">Process Capability</span>
+      <span style="font-size:9.5px;color:#64748b;font-weight:600;">Process Capability</span>
     </div>
+
+    <!-- Visual Code Donut & Control Chart Side by Side -->
+    <div class="chart-box" style="display:grid;grid-template-columns:180px 1fr;gap:14px;align-items:center;">
+      <div style="border-right:1px solid #e2e8f0;padding-right:10px;text-align:center;">
+        <div style="font-size:10px;font-weight:700;color:#334155;margin-bottom:6px;">Code & EXP Distribution</div>
+        ${generateDonutSvg(mfgDonutSlices, mfgSummary.reduce((s, m) => s + m.count, 0), 'total')}
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <div style="font-size:10px;font-weight:700;color:#334155;">Control Chart (c-Chart: Daily/Weekly Trend)</div>
+          <div style="display:flex;gap:10px;font-size:9px;">
+            <span style="color:#ef4444;">-- UCL (${controlChartData.ucl.toFixed(1)})</span>
+            <span style="color:#3b82f6;">-- Mean (${controlChartData.mean.toFixed(1)})</span>
+          </div>
+        </div>
+        ${generateControlChartSvg()}
+      </div>
+    </div>
+
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
       <div>
         <table class="data-table">
@@ -992,9 +1322,9 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   <div class="section-card" style="background:#fefce8;border-color:#fde047;">
     <div class="section-title" style="color:#854d0e;border-color:#fef08a;">
       <span>6. Strategic Quality Action Plan (CAPA)</span>
-      <span style="font-size:10px;color:#854d0e;font-weight:700;">Mandatory Quality Directives</span>
+      <span style="font-size:9.5px;color:#854d0e;font-weight:700;">Mandatory Quality Directives</span>
     </div>
-    <div style="font-size:11px;color:#713f12;line-height:1.55;">
+    <div style="font-size:10.5px;color:#713f12;line-height:1.55;">
       <strong>1. Cold-Chain Verification:</strong> Mandate digital temperature data-logger checks at receiving dock (2°C–4°C standard).
       <br/><strong>2. Packaging Reinforcement:</strong> Review crate nesting and vehicle divider strapping to minimize carton crushing during provincial road distribution.
       <br/><strong>3. Customer Chiller Audits:</strong> Sales reps must conduct 3-point temperature inspection (Bottom/Upper/Side) at customer display fridges during intake.
@@ -1006,7 +1336,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   <div class="sig-grid">
     <div class="sig-box">
       <div class="sig-role">Prepared by: Quality Assurance</div>
-      <div class="sig-line">Dr. Chanreth / QA Team</div>
+      <div class="sig-line">QA Team</div>
     </div>
     <div class="sig-box">
       <div class="sig-role">Reviewed by: Warehouse Operations</div>
@@ -1033,516 +1363,6 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     }, 280);
   };
 
-  // ---------------------------------------------------------------------------
-  // 2. Export Executive Presentation (PowerPoint .PPTX with Detailed Slides)
-  // ---------------------------------------------------------------------------
-  const handleExportPowerPoint = async () => {
-    try {
-      const Pptx = pptxgen.default || pptxgen;
-      const pptx = new Pptx();
-      pptx.layout = 'LAYOUT_16x9';
-
-      const todayStr = new Date().toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      });
-
-      // Slide Design Palettes
-      const COLOR_NAVY = '0f172a';
-      const COLOR_TEAL = '0f766e';
-      const COLOR_BLUE = '0284c7';
-      const COLOR_AMBER = 'd97706';
-      const COLOR_RED = 'b91c1c';
-      const COLOR_BG_LIGHT = 'f8fafc';
-      const COLOR_BORDER = 'cbd5e1';
-
-      // -----------------------------------------------------------------------
-      // Slide 1: Cover Slide
-      // -----------------------------------------------------------------------
-      const s1 = pptx.addSlide();
-      s1.background = { color: '0f172a' }; // Dark sleek cover
-      s1.addText('SONAVITH DEFECTIVE PRODUCT REPORT', {
-        x: 0.8,
-        y: 1.8,
-        w: 11.5,
-        fontSize: 32,
-        bold: true,
-        color: '38bdf8',
-        fontFace: 'Arial',
-      });
-      s1.addText('Executive Quality Insights, Defect Analytics & Strategic Action Plan', {
-        x: 0.8,
-        y: 2.5,
-        w: 11.5,
-        fontSize: 18,
-        color: 'f1f5f9',
-        fontFace: 'Arial',
-      });
-      s1.addText(
-        `Reporting Period: ${timeFilter} (${dateMode.replace('_', ' ')})  |  Published: ${todayStr}\nConfidential Document — For Executive Management & Quality Committee`,
-        {
-          x: 0.8,
-          y: 3.5,
-          w: 11.5,
-          fontSize: 12,
-          color: '94a3b8',
-          lineSpacing: 18,
-          fontFace: 'Arial',
-        }
-      );
-      s1.addShape(pptx.shapes.RECTANGLE, {
-        x: 0.8,
-        y: 4.8,
-        w: 11.7,
-        h: 0.05,
-        fill: { color: '0284c7' },
-      });
-
-      // -----------------------------------------------------------------------
-      // Slide 2: Executive Summary & Core Quality Metrics
-      // -----------------------------------------------------------------------
-      const s2 = pptx.addSlide();
-      s2.addText('Executive Quality Summary & Key Performance Indicators', {
-        x: 0.6,
-        y: 0.4,
-        w: 12.0,
-        fontSize: 20,
-        bold: true,
-        color: COLOR_NAVY,
-      });
-
-      // 4 Metric KPI Cards
-      const cardW = 2.8;
-      const cardGap = 0.25;
-      const startX = 0.6;
-      const kpiDefs = [
-        { label: 'TOTAL COMPLAINTS', val: `${totalComplaints}`, color: COLOR_TEAL, sub: `${warehouseComplaintsCount} Internal WH` },
-        { label: 'TOTAL ORDERED / SHIPPED', val: `${totals.ordered.toLocaleString()}`, color: COLOR_NAVY, sub: 'Units distributed' },
-        { label: 'TOTAL DEFECTIVE QTY', val: `${totals.defective.toLocaleString()}`, color: COLOR_BLUE, sub: `QA Conf: ${totals.qaConfirmed.toLocaleString()}` },
-        { label: 'OVERALL DEFECT RATE', val: `${totals.defectRate}%`, color: COLOR_RED, sub: `Exchanged: ${totals.exchanged.toLocaleString()}` },
-      ];
-
-      kpiDefs.forEach((k, i) => {
-        const xPos = startX + i * (cardW + cardGap);
-        s2.addShape(pptx.shapes.RECTANGLE, {
-          x: xPos,
-          y: 1.1,
-          w: cardW,
-          h: 1.5,
-          fill: { color: COLOR_BG_LIGHT },
-          line: { color: COLOR_BORDER, width: 1 },
-        });
-        s2.addText(k.label, { x: xPos, y: 1.25, w: cardW, fontSize: 10, bold: true, color: '64748b', align: 'center' });
-        s2.addText(k.val, { x: xPos, y: 1.6, w: cardW, fontSize: 22, bold: true, color: k.color, align: 'center' });
-        s2.addText(k.sub, { x: xPos, y: 2.15, w: cardW, fontSize: 9.5, color: '64748b', align: 'center' });
-      });
-
-      // Executive Narrative Box
-      s2.addShape(pptx.shapes.RECTANGLE, {
-        x: 0.6,
-        y: 2.9,
-        w: 12.1,
-        h: 3.6,
-        fill: { color: 'f0fdfa' },
-        line: { color: '99f6e4', width: 1 },
-      });
-      s2.addText('Executive Quality Insights & Findings:', {
-        x: 0.8,
-        y: 3.1,
-        w: 11.7,
-        fontSize: 14,
-        bold: true,
-        color: COLOR_TEAL,
-      });
-      s2.addText(
-        `• Quality Health: A total of ${totalComplaints} claims were registered across ${totals.ordered.toLocaleString()} units sold, representing an overall defect incidence rate of ${totals.defectRate}%.\n` +
-        `• Lab & QA Verification: Dr. Chanreth's laboratory team confirmed ${totals.qaConfirmed.toLocaleString()} units meeting defect criteria, primarily identifying out-of-spec acidity and foaming suppression.\n` +
-        `• Customer Protection: Warehouse operations fulfilled ${totals.exchanged.toLocaleString()} replacement units to safeguard customer trust and business continuity.\n` +
-        `• Process Stage Health: Claims are governed across the 6-stage lifecycle (Sales Intake → QA Inspection → CEO Approval → Warehouse Fulfillment → Stock Return → Finance Disposal). Current operational efforts focus on accelerating QA inspection and batch write-offs.`,
-        {
-          x: 0.8,
-          y: 3.5,
-          w: 11.7,
-          fontSize: 12,
-          color: '1e293b',
-          lineSpacing: 22,
-        }
-      );
-
-      // -----------------------------------------------------------------------
-      // Slide 3: Workflow Resolution Pipeline
-      // -----------------------------------------------------------------------
-      const s3 = pptx.addSlide();
-      s3.addText('1. Workflow Stage Pipeline & Resolution Status', {
-        x: 0.6,
-        y: 0.4,
-        w: 12.0,
-        fontSize: 20,
-        bold: true,
-        color: COLOR_NAVY,
-      });
-
-      const statusTableRows = [
-        ['Workflow Stage', 'Claims', 'Share %', 'Operational Role', 'Process Meaning'],
-        ...statusBreakdown.map((s) => [
-          s.status,
-          `${s.count}`,
-          `${((s.count / (totalComplaints || 1)) * 100).toFixed(1)}%`,
-          s.status.includes('QA') ? 'QA Inspection' : s.status.includes('approval') ? 'CEO Executive' : s.status === 'Approved' ? 'Warehouse Dispatch' : s.status === 'Completed' ? 'Stock Return' : 'Finance Disposal',
-          s.status === 'Closed' ? 'Disposed & tax verified' : s.status === 'Completed' ? 'Exchanged, return active' : s.status === 'Pending approval' ? 'Awaiting CEO decision' : 'Queue',
-        ]),
-      ];
-
-      s3.addTable(statusTableRows, {
-        x: 0.6,
-        y: 1.1,
-        w: 6.8,
-        fontSize: 10,
-        color: '0f172a',
-        fill: { color: 'ffffff' },
-        border: { pt: 0.5, color: 'cbd5e1' },
-      });
-
-      s3.addShape(pptx.shapes.RECTANGLE, {
-        x: 7.7,
-        y: 1.1,
-        w: 5.0,
-        h: 5.4,
-        fill: { color: COLOR_BG_LIGHT },
-        line: { color: COLOR_BORDER, width: 1 },
-      });
-      s3.addText('Pipeline Diagnostics & Governance', {
-        x: 7.9,
-        y: 1.3,
-        w: 4.6,
-        fontSize: 13,
-        bold: true,
-        color: COLOR_TEAL,
-      });
-      s3.addText(
-        `• Stage Velocity:\nClaims transition smoothly from Stage 1 Sales logging into Stage 2 QA inspection within 24 hours.\n\n` +
-        `• Executive Decisions:\nStage 3 CEO approval ensures rigorous oversight before replacements or credit notes are granted.\n\n` +
-        `• Fulfillment vs. Closure:\nStage 4 replacements dispatched immediately. Stage 5 & 6 isolate returned physical stock and execute bulk tax-verified write-offs per batch code.`,
-        {
-          x: 7.9,
-          y: 1.8,
-          w: 4.6,
-          fontSize: 11,
-          color: '334155',
-          lineSpacing: 19,
-        }
-      );
-
-      // -----------------------------------------------------------------------
-      // Slide 4: Defect Root Cause Analysis (Claimed vs. QA Confirmed)
-      // -----------------------------------------------------------------------
-      const s4 = pptx.addSlide();
-      s4.addText('2. Defect Classification & Technical Root Causes', {
-        x: 0.6,
-        y: 0.4,
-        w: 12.0,
-        fontSize: 20,
-        bold: true,
-        color: COLOR_NAVY,
-      });
-
-      const defectTableData = [
-        ['Defect Category', 'Claimed Count', 'Claimed %', 'QA Confirmed', 'QA %'],
-        ...defectTypes.slice(0, 7).map((d) => {
-          const qa = qaDefectTypes.items.find((q) => q.name === d.name);
-          return [d.name, `${d.count}`, `${d.percentage}%`, `${qa ? qa.count : 0}`, `${qa ? qa.percentage : '0.0'}%`];
-        }),
-      ];
-
-      s4.addTable(defectTableData, {
-        x: 0.6,
-        y: 1.1,
-        w: 6.8,
-        fontSize: 10,
-        color: '0f172a',
-        fill: { color: 'ffffff' },
-        border: { pt: 0.5, color: 'cbd5e1' },
-      });
-
-      s4.addShape(pptx.shapes.RECTANGLE, {
-        x: 7.7,
-        y: 1.1,
-        w: 5.0,
-        h: 5.4,
-        fill: { color: COLOR_BG_LIGHT },
-        line: { color: COLOR_BORDER, width: 1 },
-      });
-      s4.addText('Technical Root Cause Breakdown', {
-        x: 7.9,
-        y: 1.3,
-        w: 4.6,
-        fontSize: 13,
-        bold: true,
-        color: COLOR_BLUE,
-      });
-      s4.addText(
-        `1. Physical Handling Damage:\nAccounts for carton leakage and crushed tops during crate transit across bumpy provincial routes.\n\n` +
-        `2. Chilled Chain Temperature Abuses:\nOff-smell, curdling, and non-foaming milk trace directly to retailer display coolers running above 4°C or transit staging delays.\n\n` +
-        `3. Quality Action:\nMandating customer fridge temperature recording (Top/Bottom/Side) enforces distributor accountability.`,
-        {
-          x: 7.9,
-          y: 1.8,
-          w: 4.6,
-          fontSize: 11,
-          color: '334155',
-          lineSpacing: 19,
-        }
-      );
-
-      // -----------------------------------------------------------------------
-      // Slide 5: Product Defect Volume & Exchange Fulfillment Impact
-      // -----------------------------------------------------------------------
-      const s5 = pptx.addSlide();
-      s5.addText('3. Product SKU Defect Volume & Replacement Impact', {
-        x: 0.6,
-        y: 0.4,
-        w: 12.0,
-        fontSize: 20,
-        bold: true,
-        color: COLOR_NAVY,
-      });
-
-      const prodTableData = [
-        ['Product SKU Description', 'Initial Claim QTY', 'Warehouse Exchanged', 'Variance'],
-        ...quantityByProduct.slice(0, 7).map((p) => {
-          const diff = p.original_quantity - p.adjusted_quantity;
-          return [p.product.length > 36 ? p.product.slice(0, 36) + '...' : p.product, `${p.original_quantity}`, `${p.adjusted_quantity}`, `${diff}`];
-        }),
-      ];
-
-      s5.addTable(prodTableData, {
-        x: 0.6,
-        y: 1.1,
-        w: 7.4,
-        fontSize: 9.5,
-        color: '0f172a',
-        fill: { color: 'ffffff' },
-        border: { pt: 0.5, color: 'cbd5e1' },
-      });
-
-      s5.addShape(pptx.shapes.RECTANGLE, {
-        x: 8.3,
-        y: 1.1,
-        w: 4.4,
-        h: 5.4,
-        fill: { color: COLOR_BG_LIGHT },
-        line: { color: COLOR_BORDER, width: 1 },
-      });
-      s5.addText('SKU Concentration Findings', {
-        x: 8.5,
-        y: 1.3,
-        w: 4.0,
-        fontSize: 13,
-        bold: true,
-        color: COLOR_TEAL,
-      });
-      s5.addText(
-        `• Highest Exposure:\nFlagship 2000cc Australian Milk bottles drive the highest claim count and replacement volumes due to scale.\n\n` +
-        `• Inventory Safeguard:\nWarehouse dispatch reconciles replacement batches to ensure no unapproved stock write-offs.\n\n` +
-        `• Quality Target:\nEnhance crate dividers and shrink-wrap thickness on 2000cc product lines.`,
-        {
-          x: 8.5,
-          y: 1.8,
-          w: 4.0,
-          fontSize: 11,
-          color: '334155',
-          lineSpacing: 19,
-        }
-      );
-
-      // -----------------------------------------------------------------------
-      // Slide 6: Customer Pareto Analysis (80/20 Rule)
-      // -----------------------------------------------------------------------
-      const s6 = pptx.addSlide();
-      s6.addText('4. Customer Pareto Analysis & Key Account Focus (80/20 Rule)', {
-        x: 0.6,
-        y: 0.4,
-        w: 12.0,
-        fontSize: 20,
-        bold: true,
-        color: COLOR_NAVY,
-      });
-
-      let cumRunPpt = 0;
-      const custTableData = [
-        ['Account Name', 'Complaints', 'Share %', 'Cumulative %'],
-        ...customerComplaints.slice(0, 7).map((c) => {
-          cumRunPpt += c.count;
-          const cumPct = ((cumRunPpt / totalCustCount) * 100).toFixed(1);
-          return [c.name.length > 34 ? c.name.slice(0, 34) + '...' : c.name, `${c.count}`, `${c.percentage}%`, `${cumPct}%`];
-        }),
-      ];
-
-      s6.addTable(custTableData, {
-        x: 0.6,
-        y: 1.1,
-        w: 7.2,
-        fontSize: 9.5,
-        color: '0f172a',
-        fill: { color: 'ffffff' },
-        border: { pt: 0.5, color: 'cbd5e1' },
-      });
-
-      s6.addShape(pptx.shapes.RECTANGLE, {
-        x: 8.1,
-        y: 1.1,
-        w: 4.6,
-        h: 5.4,
-        fill: { color: '#fefce8' },
-        line: { color: '#fde047', width: 1 },
-      });
-      s6.addText('80/20 Strategic Account Action', {
-        x: 8.3,
-        y: 1.3,
-        w: 4.2,
-        fontSize: 13,
-        bold: true,
-        color: COLOR_AMBER,
-      });
-      s6.addText(
-        `• 80% Defect Concentration:\nApproximately 80% of complaint frequency is driven by the top key commercial accounts (e.g. BROWN coffee outlets, NORAK FOOD CO.).\n\n` +
-        `• Targeted Quality Audits:\nFocusing QA technician visits and cold-chain temperature checks on these key accounts delivers maximum satisfaction improvement.\n\n` +
-        `• Dedicated Distributor Support:\nProvide driver unloading guidelines and dedicated refrigerated delivery slots for high-volume accounts.`,
-        {
-          x: 8.3,
-          y: 1.8,
-          w: 4.2,
-          fontSize: 11,
-          color: '713f12',
-          lineSpacing: 19,
-        }
-      );
-
-      // -----------------------------------------------------------------------
-      // Slide 7: Statistical Process Control & c-Chart
-      // -----------------------------------------------------------------------
-      const s7 = pptx.addSlide();
-      s7.addText('5. Statistical Process Control (c-Chart Diagnosis)', {
-        x: 0.6,
-        y: 0.4,
-        w: 12.0,
-        fontSize: 20,
-        bold: true,
-        color: COLOR_NAVY,
-      });
-
-      const spcTableData = [
-        ['SPC Statistical Parameter', 'Calculated Measure', 'Operational Threshold'],
-        ['Mean Defect Rate (c̄)', `${controlChartData.mean.toFixed(2)} claims/period`, 'Baseline expected variation'],
-        ['Upper Control Limit (UCL)', `${controlChartData.ucl.toFixed(2)}`, 'Threshold for special-cause triggers'],
-        ['Lower Control Limit (LCL)', `${controlChartData.lcl.toFixed(2)}`, 'Minimum expected frequency'],
-        ['Out-of-Control Spikes (> UCL)', `${controlChartData.data.filter(d => d.outOfControl).length} Event(s)`, 'Requires formal CAPA report'],
-      ];
-
-      s7.addTable(spcTableData, {
-        x: 0.6,
-        y: 1.1,
-        w: 7.2,
-        fontSize: 10,
-        color: '0f172a',
-        fill: { color: 'ffffff' },
-        border: { pt: 0.5, color: 'cbd5e1' },
-      });
-
-      s7.addShape(pptx.shapes.RECTANGLE, {
-        x: 8.1,
-        y: 1.1,
-        w: 4.6,
-        h: 5.4,
-        fill: { color: COLOR_BG_LIGHT },
-        line: { color: COLOR_BORDER, width: 1 },
-      });
-      s7.addText('Statistical Stability Diagnostic', {
-        x: 8.3,
-        y: 1.3,
-        w: 4.2,
-        fontSize: 13,
-        bold: true,
-        color: COLOR_TEAL,
-      });
-      s7.addText(
-        `• Common vs. Special Cause:\nMost operating days fall within the natural 3-sigma control band (LCL to UCL), reflecting stable routine operation.\n\n` +
-        `• Anomaly Identification:\nSpikes exceeding the UCL indicate isolated adverse events (e.g. reefer truck malfunction or rough batch unloading) rather than chronic process decline.\n\n` +
-        `• Continuous Monitoring:\nDaily/weekly review empowers QA to intervene immediately before defects cascade to other customers.`,
-        {
-          x: 8.3,
-          y: 1.8,
-          w: 4.2,
-          fontSize: 11,
-          color: '334155',
-          lineSpacing: 19,
-        }
-      );
-
-      // -----------------------------------------------------------------------
-      // Slide 8: Strategic Action Plan & Governance Sign-Off
-      // -----------------------------------------------------------------------
-      const s8 = pptx.addSlide();
-      s8.addText('6. Strategic Quality Action Plan (CAPA) & Endorsement', {
-        x: 0.6,
-        y: 0.4,
-        w: 12.0,
-        fontSize: 20,
-        bold: true,
-        color: COLOR_NAVY,
-      });
-
-      // 4 Action Pillars
-      const pillarW = 2.8;
-      const pillars = [
-        { title: '1. Cold-Chain Rigor', text: 'Mandate digital loggers & 2°C–4°C threshold verification across all delivery vehicles.' },
-        { title: '2. Packaging Durability', text: 'Enhance corrugated crate strength and strapping to prevent carton compression.' },
-        { title: '3. Key Account Audits', text: 'Conduct on-site customer storage fridge audits for top Pareto accounts.' },
-        { title: '4. Fast Batch Disposal', text: 'Perform monthly Stage 06 batch disposal closures with Finance and Tax authorities.' },
-      ];
-
-      pillars.forEach((p, i) => {
-        const xPos = 0.6 + i * (pillarW + 0.25);
-        s8.addShape(pptx.shapes.RECTANGLE, {
-          x: xPos,
-          y: 1.1,
-          w: pillarW,
-          h: 2.2,
-          fill: { color: 'f0fdf4' },
-          line: { color: '86efac', width: 1 },
-        });
-        s8.addText(p.title, { x: xPos + 0.1, y: 1.3, w: pillarW - 0.2, fontSize: 12, bold: true, color: '15803d' });
-        s8.addText(p.text, { x: xPos + 0.1, y: 1.7, w: pillarW - 0.2, fontSize: 10, color: '1e293b', lineSpacing: 16 });
-      });
-
-      // Signature block
-      const sigW = 2.8;
-      const sigs = ['Dr. Chanreth (QA Lead)', 'Warehouse Manager', 'Finance Manager', 'Executive CEO'];
-      sigs.forEach((s, i) => {
-        const xPos = 0.6 + i * (sigW + 0.25);
-        s8.addShape(pptx.shapes.RECTANGLE, {
-          x: xPos,
-          y: 3.8,
-          w: sigW,
-          h: 2.5,
-          fill: { color: 'ffffff' },
-          line: { color: 'cbd5e1', width: 1 },
-        });
-        s8.addText(s, { x: xPos, y: 4.0, w: sigW, fontSize: 10, bold: true, color: '334155', align: 'center' });
-        s8.addShape(pptx.shapes.LINE, { x: xPos + 0.4, y: 5.6, w: sigW - 0.8, h: 0, line: { color: '94a3b8', width: 1, dashType: 'dash' } });
-        s8.addText('Signature & Date', { x: xPos, y: 5.8, w: sigW, fontSize: 9, color: '94a3b8', align: 'center' });
-      });
-
-      // Write and download
-      const safeDate = todayStr.replace(/[^a-zA-Z0-9_-]/g, '_');
-      await pptx.writeFile({ fileName: `SONAVITH_Quality_Insights_Report_${safeDate}.pptx` });
-    } catch (err) {
-      console.error('Failed to export PowerPoint presentation:', err);
-      alert('Error generating PowerPoint presentation. Please check browser permissions and try again.');
-    }
-  };
-
   return (
     <div className="insights-section">
       <div
@@ -1565,7 +1385,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           </span>
         </div>
 
-        {/* Action Buttons: Print Report (PDF) & Export PowerPoint (PPTX) */}
+        {/* Action Button: Print Report (PDF) with full visual charts */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button
             type="button"
@@ -1574,7 +1394,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
               display: 'inline-flex',
               alignItems: 'center',
               gap: 7,
-              padding: '8px 16px',
+              padding: '8px 18px',
               borderRadius: 8,
               border: '1px solid #0f766e',
               background: '#f0fdfa',
@@ -1585,34 +1405,10 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
               boxShadow: '0 1px 3px rgba(15, 118, 110, 0.15)',
               transition: 'all 0.15s ease',
             }}
-            title="Open comprehensive printable quality report with executive explanations (Print or Save as PDF)"
+            title="Open comprehensive printable quality report with all visual charts and executive explanations (Print or Save as PDF)"
           >
             <Printer size={16} />
             <span>Print Report (PDF)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleExportPowerPoint}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 7,
-              padding: '8px 16px',
-              borderRadius: 8,
-              border: '1px solid #6d28d9',
-              background: '#f5f3ff',
-              color: '#5b21b6',
-              fontSize: '0.84rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(109, 40, 217, 0.15)',
-              transition: 'all 0.15s ease',
-            }}
-            title="Download executive 8-slide PowerPoint presentation (.pptx) with full chart diagnostics and management explanations"
-          >
-            <Presentation size={16} />
-            <span>Export Slides (PPTX)</span>
           </button>
         </div>
       </div>

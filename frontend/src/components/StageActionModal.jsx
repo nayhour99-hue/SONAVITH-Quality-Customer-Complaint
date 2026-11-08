@@ -234,7 +234,7 @@ export default function StageActionModal({
   onSubmitStockReturn,
   onSubmitDisposal,
 }) {
-  const [inspectorName, setInspectorName] = useState('Dr. Chanreth');
+  const [inspectorName, setInspectorName] = useState('QA Team');
   const [customerStorageTemp, setCustomerStorageTemp] = useState('4°C');
   const [tempBottom, setTempBottom] = useState('');
   const [tempUpper, setTempUpper] = useState('');
@@ -313,7 +313,7 @@ export default function StageActionModal({
     setErrorMessage('');
     
     // QA state
-    setInspectorName(complaint.qa_review?.inspector_name || 'Dr. Chanreth');
+    setInspectorName(complaint.qa_review?.inspector_name || 'QA Team');
     setConfirmedDefectType(complaint.qa_review?.confirmed_defect_type || complaint.defect_type || 'Physical damage');
     const existingTemp = complaint.qa_review?.customer_storage_temperature || '';
     setCustomerStorageTemp(existingTemp);
