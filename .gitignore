@@ -30,3 +30,4 @@ Thumbs.db
 
 # Agents internal
 .agents/skills/coding/references/*.bak
+*.db.bak
