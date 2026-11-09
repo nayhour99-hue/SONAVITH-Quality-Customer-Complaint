@@ -228,6 +228,7 @@ export default function StageActionModal({
   complaint,
   mode, // 'qa', 'ceo', 'warehouse', 'stock_return', 'view'
   userRole = 'Admin',
+  userPermissions = null,
   onClose,
   onSubmitQA,
   onSubmitCEO,
