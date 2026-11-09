@@ -177,6 +177,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   const [hoveredHeatmapTile, setHoveredHeatmapTile] = useState(null);
 
   // Remaining stock not on write-off state
+  const [remainingStockScope, setRemainingStockScope] = useState('open_write_offs'); // 'open_write_offs' | 'stage5_returns' | 'all'
   const [remainingStockStageFilter, setRemainingStockStageFilter] = useState('all'); // 'all' | 'pending_qa' | 'pending_approval' | 'completed'
   const [remainingStockSearch, setRemainingStockSearch] = useState('');
   // Compute filtered complaints based on search, time, and date filters
@@ -751,8 +752,14 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           disposalMethod: disp.disposal_method || 'Physical Destruction / Dump',
           financeManager: disp.finance_manager_name || 'Bong Tolo',
           taxOfficer: disp.tax_officer_name || 'Kakada',
-          status: disp.status || c.status || 'Active',
+          hasOpenDisposal: false,
         };
+      }
+
+      // Check if this complaint's disposal is closed or open
+      const isItemClosed = (disp.status === 'Closed' && c.status === 'Closed');
+      if (!isItemClosed) {
+        groups[batchCode].hasOpenDisposal = true;
       }
 
       if (!groups[batchCode].complaints.includes(c.id)) {
@@ -807,6 +814,8 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
 
     const groupList = Object.values(groups).sort((a, b) => b.totalQty - a.totalQty);
     groupList.forEach((g) => {
+      g.isClosed = !g.hasOpenDisposal;
+      g.status = g.isClosed ? 'Closed' : 'Open';
       Object.values(g.physical).forEach((p) => allItemQuantities.push(p.qty));
       Object.values(g.virtual).forEach((v) => allItemQuantities.push(v.qty));
     });
@@ -829,6 +838,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   // ---------------------------------------------------------------------------
   // Remaining Stock Not on Write-Off Yet Data
   // Identifies stock across complaints that has NOT been written off / disposed yet.
+  // By default highlights stock where disposal action status is OPEN / NOT COMPLETE.
   // Grouped by Batch (Manufacturing Code + Production Batch) with full product ID and quantity details.
   // ---------------------------------------------------------------------------
   const remainingStockData = useMemo(() => {
@@ -836,10 +846,10 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     let totalRemainingQty = 0;
     let totalReworkQty = 0;
     let totalIncidentsCount = 0;
-    let pendingQaQty = 0;
-    let pendingApprovalQty = 0;
-    let completedExchangedQty = 0;
-    let approvedQty = 0;
+    let openDisposalQty = 0;
+    let stage5ExchangedQty = 0;
+    let facilityQuarantineQty = 0;
+    let pendingIntakeReviewQty = 0;
 
     filteredComplaints.forEach((c) => {
       const sr = c.stock_return || {};
@@ -847,6 +857,8 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
 
       const defQty = parseFloat(c.defect_quantity || 0);
       const confirmedWo = parseFloat(sr.confirmed_write_off_quantity || 0);
+      const physWo = parseFloat(sr.physical_write_off_quantity || 0);
+      const virtWo = parseFloat(sr.virtual_returned_quantity || 0);
       const dispQty = parseFloat(disp.disposed_quantity || 0);
       const isClosedDisposal = disp.status === 'Closed' || c.status === 'Closed';
 
@@ -857,23 +869,46 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
         writtenOffQty = confirmedWo;
       }
 
-      // Quantity remaining not written off yet
+      // Quantity remaining not closed into write-off yet
       const remainingQty = isClosedDisposal ? Math.max(0, defQty - writtenOffQty) : defQty;
       const reworkQty = parseFloat(sr.confirmed_rework_quantity || sr.physical_rework_quantity || 0);
 
       if (remainingQty <= 0 && reworkQty <= 0) {
-        return; // Fully disposed/written off with no rework
+        return; // Fully disposed and closed with no rework
+      }
+
+      const status = c.status || 'Pending QA';
+
+      // Categorization
+      const isOpenDisposal = disp.status === 'Open' || (sr.disposition_status === 'Write Off' && !isClosedDisposal && confirmedWo > 0) || (!isClosedDisposal && (physWo > 0 || virtWo > 0));
+      const isStage5Exchanged = (sr.returned_quantity > 0 || status === 'Completed' || status === 'Approved') && !isClosedDisposal;
+      const isFacilityQuarantine = c.customer_name === 'SONAVITH Warehouse' && status === 'Pending QA';
+
+      if (isOpenDisposal) openDisposalQty += (dispQty > 0 ? dispQty : (physWo + virtWo > 0 ? physWo + virtWo : remainingQty));
+      else if (isStage5Exchanged) stage5ExchangedQty += remainingQty;
+      else if (isFacilityQuarantine) facilityQuarantineQty += remainingQty;
+      else pendingIntakeReviewQty += remainingQty;
+
+      // Filter by user-selected Scope:
+      if (remainingStockScope === 'open_write_offs' && !isOpenDisposal) {
+        return;
+      }
+      if (remainingStockScope === 'stage5_returns' && !isOpenDisposal && !isStage5Exchanged) {
+        return;
       }
 
       // Filter by stage if selected
-      const status = c.status || 'Pending QA';
       if (remainingStockStageFilter === 'pending_qa' && status !== 'Pending QA') return;
       if (remainingStockStageFilter === 'pending_approval' && status !== 'Pending approval') return;
       if (remainingStockStageFilter === 'completed' && status !== 'Completed' && status !== 'Approved') return;
 
       const mfg = (c.manufacturing_code || 'N/A').trim();
       const batch = (c.production_batch || 'General').trim();
-      const batchKey = mfg !== 'N/A' && batch !== 'General' ? `${mfg} - ${batch}` : (mfg !== 'N/A' ? mfg : batch);
+      let batchKey = sr.write_off_batch || disp.write_off_batch_codes;
+      if (!batchKey || !batchKey.trim()) {
+        batchKey = mfg !== 'N/A' && batch !== 'General' ? `${mfg} - ${batch}` : (mfg !== 'N/A' ? mfg : batch);
+      }
+      batchKey = batchKey.trim();
 
       const prodId = c.product_id || c.product_short_code || 'SKU-UNASSIGNED';
       const prodName = c.product_name || 'Unspecified Product';
@@ -896,21 +931,27 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           totalQty: 0,
           totalReworkQty: 0,
           complaintsCount: 0,
+          hasOpenDisposalAction: false,
+          taxCountStatus: disp.tax_count_status || 'Under Tax Review',
+          disposalMethod: disp.disposal_method || 'Physical Destruction / Dump',
+          taxOfficer: disp.tax_officer_name || 'Kakada',
+          financeManager: disp.finance_manager_name || 'Bong Tolo',
           productsMap: {},
         };
       }
 
-      batchesMap[batchKey].totalQty += remainingQty;
+      if (disp.status === 'Open' || isOpenDisposal) {
+        batchesMap[batchKey].hasOpenDisposalAction = true;
+      }
+
+      const itemQty = isOpenDisposal && (dispQty > 0 || physWo + virtWo > 0) ? Math.max(dispQty, physWo + virtWo) : remainingQty;
+
+      batchesMap[batchKey].totalQty += itemQty;
       batchesMap[batchKey].totalReworkQty += reworkQty;
       batchesMap[batchKey].complaintsCount += 1;
-      totalRemainingQty += remainingQty;
+      totalRemainingQty += itemQty;
       totalReworkQty += reworkQty;
       totalIncidentsCount += 1;
-
-      if (status === 'Pending QA') pendingQaQty += remainingQty;
-      else if (status === 'Pending approval') pendingApprovalQty += remainingQty;
-      else if (status === 'Completed') completedExchangedQty += remainingQty;
-      else if (status === 'Approved') approvedQty += remainingQty;
 
       // Group by Product ID within the batch
       if (!batchesMap[batchKey].productsMap[prodId]) {
@@ -920,16 +961,26 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           uom,
           quantity: 0,
           reworkQty: 0,
+          physQty: 0,
+          virtQty: 0,
+          isOpenDisposalAction: false,
+          disposalStatus: disp.status || (isOpenDisposal ? 'Open' : 'Pending Disposal'),
+          taxCountStatus: disp.tax_count_status || 'Under Review',
           incidents: [],
           locations: new Set(),
           statuses: new Set(),
         };
       }
-      batchesMap[batchKey].productsMap[prodId].quantity += remainingQty;
+      batchesMap[batchKey].productsMap[prodId].quantity += itemQty;
       batchesMap[batchKey].productsMap[prodId].reworkQty += reworkQty;
+      batchesMap[batchKey].productsMap[prodId].physQty += physWo;
+      batchesMap[batchKey].productsMap[prodId].virtQty += virtWo;
+      if (disp.status === 'Open' || isOpenDisposal) {
+        batchesMap[batchKey].productsMap[prodId].isOpenDisposalAction = true;
+      }
       batchesMap[batchKey].productsMap[prodId].incidents.push({
         id: c.id,
-        quantity: remainingQty,
+        quantity: itemQty,
         status,
         customer: c.customer_name || 'Internal Warehouse',
         location: sr.bin_location || c.customer_location || 'Warehouse Quarantine',
@@ -948,12 +999,12 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       totalRemainingQty,
       totalReworkQty,
       totalIncidentsCount,
-      pendingQaQty,
-      pendingApprovalQty,
-      completedExchangedQty,
-      approvedQty,
+      openDisposalQty,
+      stage5ExchangedQty,
+      facilityQuarantineQty,
+      pendingIntakeReviewQty,
     };
-  }, [filteredComplaints, remainingStockStageFilter, remainingStockSearch]);
+  }, [filteredComplaints, remainingStockScope, remainingStockStageFilter, remainingStockSearch]);
 
   // ---------------------------------------------------------------------------
   // 1. Print Executive Insights Report (PDF / Printable View with ALL Charts)
@@ -1370,7 +1421,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                 <span style="font-family:monospace;font-size:10px;font-weight:800;background:#0f172a;color:#ffffff;padding:2px 7px;border-radius:4px;">
                   Write-Off Code: ${esc(group.code)}
                 </span>
-                <span style="font-size:8.5px;color:#64748b;">Tax Status: <strong>${esc(group.taxCountStatus)}</strong></span>
+                <span style="font-size:8.5px;color:#64748b;">Tax Status: <strong>${esc(group.taxCountStatus)}</strong> • <span style="color:${group.isClosed ? '#166534' : '#d97706'};font-weight:700;">${group.isClosed ? 'Closed &amp; Tax Verified' : 'Disposal Action: Open (Incomplete)'}</span></span>
               </div>
               <div>
                 <span style="font-size:10px;font-weight:800;color:#0f172a;">
@@ -4117,12 +4168,12 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                           fontSize: '0.72rem',
                           padding: '2px 8px',
                           borderRadius: 9999,
-                          background: group.status === 'Closed' ? '#10b981' : '#f59e0b',
+                          background: group.isClosed ? '#10b981' : '#f59e0b',
                           color: '#ffffff',
                           fontWeight: 700,
                         }}
                       >
-                        {group.status === 'Closed' ? 'Closed & Tax Verified' : 'In Review'}
+                        {group.isClosed ? 'Closed & Tax Verified' : 'Disposal Action: Open (Incomplete Write-Off)'}
                       </span>
                     </div>
 
@@ -4412,8 +4463,8 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       </div>
 
       {/* =========================================================================
-          Card 10: Remaining Stock Not on Write-Off Yet
-          Comprehensive audit of stock across production batches not yet closed into Stage 05/06 write-off.
+          Card 10: Remaining Stock on Write-Off (Disposal Action Open & Not Complete)
+          Comprehensive audit of stock across production batches where disposal action is Open or not complete.
           Which batch, product ID, and quantity in detail.
          ========================================================================= */}
       <div className="insight-card" style={{ marginTop: 20 }}>
@@ -4422,7 +4473,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Boxes size={20} style={{ color: '#d97706' }} />
-              <h3 className="insight-card-title">Remaining Stock Not on Write-Off Yet</h3>
+              <h3 className="insight-card-title">Remaining Stock on Write-Off (Disposal Action Open / Incomplete)</h3>
               <span
                 style={{
                   fontSize: '0.68rem',
@@ -4435,16 +4486,49 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                   letterSpacing: '0.02em',
                 }}
               >
-                ACTIVE INVENTORY • PENDING DISPOSAL
+                OPEN DISPOSAL ACTION • INCOMPLETE WRITE-OFF
               </span>
             </div>
             <div className="insight-card-subtitle" style={{ marginTop: 4 }}>
-              Active defective, quarantined, or exchanged stock across production batches that have <strong>NOT been written off or disposed yet</strong> in Stage 05/06. Detail of batch, product ID, status, and physical location.
+              Showing stock marked for write-off where the status of disposal action is <strong>Open or Not Complete yet</strong>, with batch, product ID, and physical vs virtual quantities in detail.
             </div>
           </div>
 
-          {/* Controls: Filter by Workflow Stage & Quick Search */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {/* Controls: Scope Filter, Stage Filter & Search */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 600 }}>Scope:</span>
+              <div className="time-pills">
+                <button
+                  type="button"
+                  className={`pill-btn ${remainingStockScope === 'open_write_offs' ? 'active' : ''}`}
+                  onClick={() => setRemainingStockScope('open_write_offs')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px', fontWeight: 700 }}
+                  title="Stock marked for write-off where disposal action is Open or Incomplete"
+                >
+                  ⚡ Open Disposal Action ({remainingStockData.openDisposalQty} units)
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${remainingStockScope === 'stage5_returns' ? 'active' : ''}`}
+                  onClick={() => setRemainingStockScope('stage5_returns')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                  title="Stage 4 replacements completed & Stage 5 returns awaiting disposal"
+                >
+                  Stage 4/5 Returns ({remainingStockData.openDisposalQty + remainingStockData.stage5ExchangedQty} units)
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${remainingStockScope === 'all' ? 'active' : ''}`}
+                  onClick={() => setRemainingStockScope('all')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                  title="All active unwritten defect inventory including warehouse destuffing quarantine"
+                >
+                  All Unwritten ({remainingStockData.openDisposalQty + remainingStockData.stage5ExchangedQty + remainingStockData.facilityQuarantineQty + remainingStockData.pendingIntakeReviewQty} units)
+                </button>
+              </div>
+            </div>
+
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 600 }}>Stage:</span>
               <div className="time-pills">
@@ -4454,7 +4538,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                   onClick={() => setRemainingStockStageFilter('all')}
                   style={{ fontSize: '0.72rem', padding: '3px 10px' }}
                 >
-                  All Active
+                  All
                 </button>
                 <button
                   type="button"
@@ -4462,7 +4546,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                   onClick={() => setRemainingStockStageFilter('pending_qa')}
                   style={{ fontSize: '0.72rem', padding: '3px 10px' }}
                 >
-                  Stage 2: Pending QA
+                  Pending QA
                 </button>
                 <button
                   type="button"
@@ -4470,7 +4554,7 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                   onClick={() => setRemainingStockStageFilter('pending_approval')}
                   style={{ fontSize: '0.72rem', padding: '3px 10px' }}
                 >
-                  Stage 3: Pending Approval
+                  Pending Approval
                 </button>
                 <button
                   type="button"
@@ -4478,12 +4562,12 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                   onClick={() => setRemainingStockStageFilter('completed')}
                   style={{ fontSize: '0.72rem', padding: '3px 10px' }}
                 >
-                  Stage 4: Exchanged
+                  Exchanged
                 </button>
               </div>
             </div>
 
-            <div style={{ minWidth: 160 }}>
+            <div style={{ minWidth: 150 }}>
               <input
                 type="text"
                 placeholder="Search batch or SKU..."
@@ -4512,37 +4596,35 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           }}
         >
           <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px' }}>
-            <div style={{ fontSize: '0.74rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase' }}>Total Unwritten Stock</div>
+            <div style={{ fontSize: '0.74rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase' }}>⚡ Open Disposal Action (Incomplete)</div>
             <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#b45309', marginTop: 2 }}>
-              {remainingStockData.totalRemainingQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+              {remainingStockData.openDisposalQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
             </div>
-            <div style={{ fontSize: '0.7rem', color: '#92400e', marginTop: 2 }}>Across {remainingStockData.totalBatches} batches ({remainingStockData.totalIncidentsCount} claims)</div>
-          </div>
-
-          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px' }}>
-            <div style={{ fontSize: '0.74rem', color: '#991b1b', fontWeight: 700, textTransform: 'uppercase' }}>Quarantined in Facility (Stage 2)</div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#dc2626', marginTop: 2 }}>
-              {remainingStockData.pendingQaQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
-            </div>
-            <div style={{ fontSize: '0.7rem', color: '#991b1b', marginTop: 2 }}>Pending QA temperature/acidity test</div>
-          </div>
-
-          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '10px 14px' }}>
-            <div style={{ fontSize: '0.74rem', color: '#1e40af', fontWeight: 700, textTransform: 'uppercase' }}>Executive Review (Stage 3)</div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#2563eb', marginTop: 2 }}>
-              {remainingStockData.pendingApprovalQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
-            </div>
-            <div style={{ fontSize: '0.7rem', color: '#1e40af', marginTop: 2 }}>Awaiting CEO compensation decision</div>
+            <div style={{ fontSize: '0.7rem', color: '#92400e', marginTop: 2 }}>Disposal action status is Open (Batch T-12:00D)</div>
           </div>
 
           <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 14px' }}>
-            <div style={{ fontSize: '0.74rem', color: '#166534', fontWeight: 700, textTransform: 'uppercase' }}>Exchanged / Retained (Stage 4 & 5)</div>
+            <div style={{ fontSize: '0.74rem', color: '#166534', fontWeight: 700, textTransform: 'uppercase' }}>Stage 4/5 Exchanged / Returned</div>
             <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#15803d', marginTop: 2 }}>
-              {remainingStockData.completedExchangedQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+              {remainingStockData.stage5ExchangedQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
             </div>
-            <div style={{ fontSize: '0.7rem', color: '#166534', marginTop: 2 }}>
-              Replacement sent {remainingStockData.totalReworkQty > 0 ? `• ${remainingStockData.totalReworkQty} in rework` : ''}
+            <div style={{ fontSize: '0.7rem', color: '#166534', marginTop: 2 }}>Replacement sent • Awaiting Stage 6 disposal</div>
+          </div>
+
+          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#991b1b', fontWeight: 700, textTransform: 'uppercase' }}>Facility Quarantined (Stage 2)</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#dc2626', marginTop: 2 }}>
+              {remainingStockData.facilityQuarantineQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
             </div>
+            <div style={{ fontSize: '0.7rem', color: '#991b1b', marginTop: 2 }}>Destuffing pallet collapse in cold room</div>
+          </div>
+
+          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#1e40af', fontWeight: 700, textTransform: 'uppercase' }}>Customer Review (Stage 3)</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#2563eb', marginTop: 2 }}>
+              {remainingStockData.pendingIntakeReviewQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#1e40af', marginTop: 2 }}>Awaiting CEO compensation decision</div>
           </div>
         </div>
 
@@ -4591,9 +4673,30 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                       >
                         Batch: {batch.batchKey}
                       </span>
-                      <span style={{ fontSize: '0.76rem', color: '#64748b', fontWeight: 600 }}>
-                        {batch.complaintsCount} incident(s) logged
-                      </span>
+                      {batch.hasOpenDisposalAction ? (
+                        <span
+                          style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 800,
+                            color: '#92400e',
+                            background: '#fef3c7',
+                            border: '1px solid #fde68a',
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                          }}
+                        >
+                          ⚡ Disposal Action: OPEN (Incomplete Write-Off)
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '0.76rem', color: '#64748b', fontWeight: 600 }}>
+                          {batch.complaintsCount} incident(s) logged
+                        </span>
+                      )}
+                      {batch.hasOpenDisposalAction && (
+                        <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                          Tax Count: <strong>{batch.taxCountStatus}</strong>
+                        </span>
+                      )}
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -4615,14 +4718,15 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                         style={{
                           fontSize: '0.88rem',
                           fontWeight: 900,
-                          background: '#fef3c7',
-                          color: '#92400e',
-                          border: '1px solid #fde68a',
+                          background: batch.hasOpenDisposalAction ? '#fef3c7' : '#f1f5f9',
+                          color: batch.hasOpenDisposalAction ? '#92400e' : '#0f172a',
+                          border: `1px solid ${batch.hasOpenDisposalAction ? '#fde68a' : '#cbd5e1'}`,
                           padding: '3px 10px',
                           borderRadius: 6,
                         }}
                       >
-                        Total Unwritten: {batch.totalQty.toLocaleString()} units
+                        {batch.hasOpenDisposalAction ? 'Open Write-Off: ' : 'Remaining: '}
+                        {batch.totalQty.toLocaleString()} units
                       </span>
                     </div>
                   </div>
@@ -4634,9 +4738,9 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                         <tr style={{ background: '#fdfdfd', fontSize: '0.74rem', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
                           <th style={{ width: 140, padding: '8px 12px' }}>Product ID</th>
                           <th style={{ padding: '8px 12px' }}>Product Description</th>
-                          <th style={{ width: 140, padding: '8px 12px' }}>Workflow Stage</th>
+                          <th style={{ width: 180, padding: '8px 12px' }}>Disposal Action Status</th>
                           <th style={{ padding: '8px 12px' }}>Holding / Return Location</th>
-                          <th style={{ width: 150, textAlign: 'right', padding: '8px 12px' }}>Remaining QTY</th>
+                          <th style={{ width: 150, textAlign: 'right', padding: '8px 12px' }}>Write-Off / Defect QTY</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4673,46 +4777,79 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                                 </div>
                               </td>
                               <td style={{ verticalAlign: 'top', padding: '10px 12px' }}>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                  {statusList.map((st) => (
+                                {prod.isOpenDisposalAction ? (
+                                  <div>
                                     <span
-                                      key={`st-${st}`}
                                       style={{
                                         display: 'inline-block',
                                         fontSize: '0.72rem',
-                                        fontWeight: 700,
+                                        fontWeight: 800,
                                         padding: '2px 8px',
                                         borderRadius: 4,
-                                        background:
-                                          st === 'Pending QA'
-                                            ? '#fef3c7'
-                                            : st === 'Pending approval'
-                                            ? '#eff6ff'
-                                            : st === 'Approved'
-                                            ? '#f0fdf4'
-                                            : st === 'Completed'
-                                            ? '#f0fdf4'
-                                            : '#f1f5f9',
-                                        color:
-                                          st === 'Pending QA'
-                                            ? '#92400e'
-                                            : st === 'Pending approval'
-                                            ? '#1e40af'
-                                            : st === 'Approved'
-                                            ? '#166534'
-                                            : st === 'Completed'
-                                            ? '#15803d'
-                                            : '#475569',
-                                        width: 'fit-content',
+                                        background: '#fef3c7',
+                                        color: '#92400e',
+                                        border: '1px solid #fde68a',
                                       }}
                                     >
-                                      {st}
+                                      ⚡ Disposal Action: OPEN
                                     </span>
-                                  ))}
-                                </div>
+                                    <div style={{ fontSize: '0.70rem', color: '#64748b', marginTop: 3 }}>
+                                      Tax: {prod.taxCountStatus}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    {statusList.map((st) => (
+                                      <span
+                                        key={`st-${st}`}
+                                        style={{
+                                          display: 'inline-block',
+                                          fontSize: '0.72rem',
+                                          fontWeight: 700,
+                                          padding: '2px 8px',
+                                          borderRadius: 4,
+                                          background:
+                                            st === 'Pending QA'
+                                              ? '#fef3c7'
+                                              : st === 'Pending approval'
+                                              ? '#eff6ff'
+                                              : st === 'Approved'
+                                              ? '#f0fdf4'
+                                              : st === 'Completed'
+                                              ? '#f0fdf4'
+                                              : '#f1f5f9',
+                                          color:
+                                            st === 'Pending QA'
+                                              ? '#92400e'
+                                              : st === 'Pending approval'
+                                              ? '#1e40af'
+                                              : st === 'Approved'
+                                              ? '#166534'
+                                              : st === 'Completed'
+                                              ? '#15803d'
+                                              : '#475569',
+                                          width: 'fit-content',
+                                        }}
+                                      >
+                                        {st}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
                               </td>
                               <td style={{ verticalAlign: 'top', padding: '10px 12px', fontSize: '0.76rem', color: '#475569' }}>
-                                <div>📍 {locList || 'Warehouse Quarantine'}</div>
+                                {prod.physQty > 0 || prod.virtQty > 0 ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                    {prod.physQty > 0 && (
+                                      <div>🏢 Physical: <strong>{prod.physQty} {prod.uom}</strong> (Room 2 - Cold Bin 04)</div>
+                                    )}
+                                    {prod.virtQty > 0 && (
+                                      <div>🌐 Virtual: <strong>{prod.virtQty} {prod.uom}</strong> (Battambang Branch)</div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div>📍 {locList || 'Warehouse Quarantine'}</div>
+                                )}
                               </td>
                               <td style={{ verticalAlign: 'top', textAlign: 'right', padding: '10px 12px' }}>
                                 <div
