@@ -484,7 +484,18 @@ export default function App() {
       )}
 
       {/* Overview Insights Charts (shown in Overview tab) */}
-      {currentTab === 'overview' && <InsightsView metrics={metrics} dateMode={dateMode} complaints={complaints} />}
+      {currentTab === 'overview' && (
+        <InsightsView
+          metrics={metrics}
+          dateMode={dateMode}
+          complaints={complaints}
+          searchQuery={searchQuery}
+          timeFilter={timeFilter}
+          dateFilter={dateFilter}
+          userRole={userRole}
+          userPermissions={userPermissions}
+        />
+      )}
 
       {/* Masterlist View */}
       {currentTab === 'masterlist' && <MasterlistView />}

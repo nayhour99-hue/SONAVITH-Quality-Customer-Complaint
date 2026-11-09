@@ -19,7 +19,14 @@ import {
   Play,
   Building2,
   MapPin,
+  Printer,
 } from 'lucide-react';
+import {
+  canExportStage,
+  canPrintStageReport,
+  getStagePrintMetadata,
+  isStageOwner,
+} from '../utils/permissions';
 
 export default function ComplaintTable({
   complaints,
@@ -144,6 +151,228 @@ export default function ComplaintTable({
       return sortOrder === 'asc' ? cmp : -cmp;
     });
   }, [complaints, dateMode, sortOrder]);
+
+  // Stage Owner Print & Export Authorizations:
+  // Every stage owner can export file and print report for their own stage.
+  // CEO & Admin have full cross-stage authority; QA has QA, Stock Return & Overview authority.
+  const isCurrentStageOwner = isStageOwner(currentTab, userRole, userPermissions);
+  const canExport = canExportStage(currentTab, userRole, userPermissions);
+  const canPrint = canPrintStageReport(currentTab, userRole, userPermissions);
+
+  const handlePrintStageReport = () => {
+    let printWin = null;
+    try {
+      const esc = (val) =>
+        val === undefined || val === null || val === ''
+          ? '—'
+          : String(val)
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
+
+      const meta = getStagePrintMetadata(currentTab);
+      const todayStr = new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      const timeStr = new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      const totalDefectUnits = sortedComplaints.reduce(
+        (sum, c) => sum + (Number(c.defect_quantity) || 0),
+        0
+      );
+
+      printWin = window.open('', '_blank', 'width=1120,height=900');
+      if (!printWin) {
+        window.print();
+        return;
+      }
+
+      const rowsHtml = sortedComplaints.map((c, idx) => {
+        let stageNotes = '';
+        if (currentTab === 'sales') {
+          stageNotes = `Rep: ${esc(c.sales_rep_name || '—')}${c.so_number ? ` • SO: ${esc(c.so_number)}` : ''}`;
+        } else if (currentTab === 'qa') {
+          const qa = c.qa_review || {};
+          stageNotes = `Temp: ${esc(c.storage_temp || qa.storage_temp || '—')}${qa.findings ? ` • Notes: ${esc(qa.findings)}` : ''}`;
+        } else if (currentTab === 'ceo') {
+          const ceo = c.ceo_decision || {};
+          stageNotes = `Decision: ${esc(ceo.action || c.status)}${ceo.compensation_type ? ` (${esc(ceo.compensation_type)})` : ''}`;
+        } else if (currentTab === 'warehouse') {
+          const wh = c.warehouse_fulfillment || {};
+          stageNotes = `Exchanged: ${wh.exchanged_quantity || 0} ${esc(c.unit_of_measure)}${wh.dispatch_status ? ` • ${esc(wh.dispatch_status)}` : ''}`;
+        } else if (currentTab === 'stock_return') {
+          const sr = c.stock_return || {};
+          stageNotes = `Bin: ${esc(sr.bin_location || '—')}${sr.qa_signed_off === 'Yes' ? ' • QA Signed Off' : ' • Pending Sign-Off'}`;
+        } else if (currentTab === 'disposal') {
+          const disp = c.disposal || {};
+          stageNotes = `Batch: ${esc(c.stock_return?.write_off_batch || disp.write_off_batch || '—')}${disp.tax_audit_officer ? ` • Tax Officer: ${esc(disp.tax_audit_officer)}` : ''}`;
+        } else {
+          stageNotes = `Status: ${esc(c.status)}`;
+        }
+
+        return `
+          <tr>
+            <td style="text-align:center;color:#64748b;font-size:10px;">${idx + 1}</td>
+            <td style="font-family:monospace;font-weight:700;color:#0f172a;white-space:nowrap;">${esc(c.id)}</td>
+            <td style="white-space:nowrap;font-size:10px;color:#334155;">${esc(c.complaint_date)}</td>
+            <td>
+              <div style="font-weight:700;color:#0f172a;font-size:10.5px;">${esc(c.customer_name)}</div>
+              <div style="font-size:9px;color:#64748b;">${esc(c.customer_location)}</div>
+            </td>
+            <td>
+              <div style="font-weight:600;color:#0f172a;font-size:10.5px;">${esc(c.product_name)}</div>
+              <div style="font-size:9px;color:#64748b;">EXP: ${esc(c.product_expiry_date || '—')} • Batch: ${esc(c.production_batch || '—')}</div>
+            </td>
+            <td>
+              <span style="font-size:10px;font-weight:600;color:#334155;">${esc(c.defect_type || 'Defective Stock')}</span>
+            </td>
+            <td style="text-align:right;font-weight:800;color:#b91c1c;white-space:nowrap;">
+              ${(Number(c.defect_quantity) || 0).toLocaleString()} <span style="font-size:9px;color:#64748b;font-weight:500;">${esc(c.unit_of_measure || 'units')}</span>
+            </td>
+            <td style="text-align:center;white-space:nowrap;">
+              <span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;background:#f1f5f9;color:#334155;">
+                ${esc(c.status)}
+              </span>
+            </td>
+            <td style="font-size:9.5px;color:#475569;">
+              ${stageNotes}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SONAVITH - ${meta.title}</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm 10mm; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 16px; color: #0f172a; background: #fff; font-size: 11px; }
+    .header-bar { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid ${meta.color}; padding-bottom: 12px; margin-bottom: 14px; }
+    .company-title { font-size: 18px; font-weight: 900; color: #0f172a; letter-spacing: -0.3px; margin: 0; }
+    .stage-title { font-size: 14px; font-weight: 800; color: ${meta.color}; margin-top: 2px; }
+    .meta-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 9.5px; font-weight: 700; background: ${meta.color}15; color: ${meta.color}; border: 1px solid ${meta.color}40; margin-top: 4px; }
+    .header-right { text-align: right; font-size: 10px; color: #475569; }
+    .summary-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+    .kpi-card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; background: #f8fafc; }
+    .kpi-label { font-size: 9px; font-weight: 700; color: #64748b; text-transform: uppercase; }
+    .kpi-val { font-size: 16px; font-weight: 900; color: #0f172a; margin-top: 2px; }
+    table.data-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 10px; }
+    table.data-table th { background: #f1f5f9; color: #334155; font-weight: 700; text-align: left; padding: 7px 8px; border: 1px solid #cbd5e1; font-size: 9.5px; text-transform: uppercase; }
+    table.data-table td { padding: 6px 8px; border: 1px solid #e2e8f0; vertical-align: middle; }
+    table.data-table tr:nth-child(even) { background: #fbfcfe; }
+    .sig-section { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; page-break-inside: avoid; }
+    .sig-box { border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; text-align: center; }
+    .sig-role { font-size: 9.5px; font-weight: 700; color: #334155; text-transform: uppercase; margin-bottom: 38px; }
+    .sig-line { border-top: 1px solid #94a3b8; padding-top: 4px; font-size: 10px; font-weight: 600; color: #0f172a; }
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none !important; }
+      table.data-table th { background: #f1f5f9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header-bar">
+    <div>
+      <h1 class="company-title">SONAVITH DEFECTIVE PRODUCT REPORT</h1>
+      <div class="stage-title">${meta.title}</div>
+      <div class="meta-tag">${meta.badge} • ${meta.department}</div>
+    </div>
+    <div class="header-right">
+      <div><strong>Printed:</strong> ${todayStr} at ${timeStr}</div>
+      <div><strong>Printed By:</strong> ${esc(userRole)} User</div>
+      <div><strong>Filter Period:</strong> ${esc(timeFilter || 'All time')}</div>
+    </div>
+  </div>
+
+  <div class="summary-cards">
+    <div class="kpi-card">
+      <div class="kpi-label">Claims in Queue</div>
+      <div class="kpi-val">${sortedComplaints.length}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Total Defect Volume</div>
+      <div class="kpi-val" style="color:#b91c1c;">${totalDefectUnits.toLocaleString()} <span style="font-size:10px;font-weight:600;color:#64748b;">units</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Workflow Stage</div>
+      <div class="kpi-val" style="color:${meta.color};">${meta.badge}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Authorized Role</div>
+      <div class="kpi-val">${esc(userRole)}</div>
+    </div>
+  </div>
+
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width:24px;text-align:center;">#</th>
+        <th style="width:110px;">Incident ID</th>
+        <th style="width:75px;">Date</th>
+        <th>Customer & Outlet</th>
+        <th>Product SKU & Batch</th>
+        <th>Defect Category</th>
+        <th style="text-align:right;width:85px;">Defect QTY</th>
+        <th style="text-align:center;width:90px;">Status</th>
+        <th>Stage Specific Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml || '<tr><td colspan="9" style="text-align:center;padding:16px;color:#64748b;">No complaints in this stage queue.</td></tr>'}
+    </tbody>
+  </table>
+
+  <div class="sig-section">
+    <div class="sig-box">
+      <div class="sig-role">Prepared by (${meta.roleSignOff})</div>
+      <div class="sig-line">${esc(userRole)} Lead</div>
+    </div>
+    <div class="sig-box">
+      <div class="sig-role">Reviewed by (Department Head)</div>
+      <div class="sig-line">Operations Supervisor</div>
+    </div>
+    <div class="sig-box">
+      <div class="sig-role">Verified by (Quality Assurance & Executive)</div>
+      <div class="sig-line">QA Team / CEO Sign-Off</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+      printWin.document.open();
+      printWin.document.write(html);
+      printWin.document.close();
+      printWin.focus();
+      setTimeout(() => {
+        try {
+          printWin.print();
+        } catch (e) {
+          console.warn('printWin.print caught:', e);
+        }
+      }, 250);
+    } catch (err) {
+      console.error('Failed to print stage report:', err);
+      if (printWin && !printWin.closed) {
+        printWin.document.open();
+        printWin.document.write(`<html><body style="font-family:sans-serif;padding:24px;color:#b91c1c;">
+          <h2>Unable to print stage report</h2>
+          <p>${err?.message || 'Unknown error'}</p>
+        </body></html>`);
+        printWin.document.close();
+      } else {
+        alert('Could not print stage report: ' + (err?.message || 'Unknown error'));
+      }
+    }
+  };
 
   // Helper to format status badge class
   const getStatusBadgeClass = (status) => {
@@ -317,74 +546,106 @@ export default function ComplaintTable({
             )}
           </div>
 
-          {/* Export to Excel Split Button & Dropdown */}
-          <div className="export-excel-wrapper" ref={exportMenuRef}>
-            <div className="export-excel-split-btn">
-              <button
-                id="btn-export-excel"
-                type="button"
-                className="btn-export-excel"
-                onClick={() => onExportExcel && onExportExcel(false)}
-                disabled={isExporting}
-                title="Download complaint sheet with all 4 workflow stages and embedded defect photos in Excel (.xlsx)"
-                aria-label="Export complaints to Excel"
-              >
-                {isExporting ? (
-                  <Loader2 size={15} className="spin-animation" />
-                ) : (
-                  <FileSpreadsheet size={15} />
-                )}
-                <span>{isExporting ? 'Exporting...' : 'Export Excel'}</span>
-              </button>
-              <button
-                type="button"
-                className="btn-export-dropdown-toggle"
-                onClick={() => setIsExportMenuOpen((prev) => !prev)}
-                disabled={isExporting}
-                title="Export options (current view or full archive)"
-                aria-label="Export options"
-              >
-                <ChevronDown size={14} />
-              </button>
-            </div>
+          {/* Print Stage Report Button - Authorized for stage owner (+ CEO & Admin; QA on overview/qa/stock_return) */}
+          {canPrint && (
+            <button
+              id="btn-print-stage-report"
+              type="button"
+              className="btn-print-stage-report"
+              onClick={handlePrintStageReport}
+              title={`Print official ${currentTab === 'overview' ? 'master incident register' : `${currentTab} stage queue report`} (PDF)`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '7px 13px',
+                borderRadius: 6,
+                border: '1px solid #cbd5e1',
+                background: '#ffffff',
+                color: '#334155',
+                fontSize: '0.8rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Printer size={15} color="#475569" />
+              <span>Print Stage Report</span>
+            </button>
+          )}
 
-            {isExportMenuOpen && (
-              <div className="export-dropdown-menu">
+          {/* Export to Excel Split Button & Dropdown - Authorized for stage owner (+ CEO & Admin; QA on overview/qa/stock_return) */}
+          {canExport && (
+            <div className="export-excel-wrapper" ref={exportMenuRef}>
+              <div className="export-excel-split-btn">
                 <button
+                  id="btn-export-excel"
                   type="button"
-                  className="export-dropdown-item"
-                  onClick={() => {
-                    setIsExportMenuOpen(false);
-                    onExportExcel && onExportExcel(false);
-                  }}
+                  className="btn-export-excel"
+                  onClick={() => onExportExcel && onExportExcel(false)}
+                  disabled={isExporting}
+                  title="Download complaint sheet with all workflow stages and embedded defect photos in Excel (.xlsx)"
+                  aria-label="Export complaints to Excel"
                 >
-                  <div className="export-item-header">
-                    <Download size={14} className="export-item-icon" />
-                    <span className="export-item-title">Export Current View</span>
-                  </div>
-                  <span className="export-item-desc">
-                    {sortedComplaints.length} records matching current tab & filters
-                  </span>
+                  {isExporting ? (
+                    <Loader2 size={15} className="spin-animation" />
+                  ) : (
+                    <FileSpreadsheet size={15} />
+                  )}
+                  <span>{isExporting ? 'Exporting...' : 'Export Excel'}</span>
                 </button>
-                <button
-                  type="button"
-                  className="export-dropdown-item"
-                  onClick={() => {
-                    setIsExportMenuOpen(false);
-                    onExportExcel && onExportExcel(true);
-                  }}
-                >
-                  <div className="export-item-header">
-                    <FileSpreadsheet size={14} className="export-item-icon" />
-                    <span className="export-item-title">Export All Records</span>
-                  </div>
-                  <span className="export-item-desc">
-                    All complaints in register with complete photos
-                  </span>
-                </button>
+                {(userRole === 'Admin' || userRole === 'CEO' || (userRole === 'QA' && isOverviewTab)) && (
+                  <button
+                    type="button"
+                    className="btn-export-dropdown-toggle"
+                    onClick={() => setIsExportMenuOpen((prev) => !prev)}
+                    disabled={isExporting}
+                    title="Export options (current view or full archive)"
+                    aria-label="Export options"
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                )}
               </div>
-            )}
-          </div>
+
+              {isExportMenuOpen && (
+                <div className="export-dropdown-menu">
+                  <button
+                    type="button"
+                    className="export-dropdown-item"
+                    onClick={() => {
+                      setIsExportMenuOpen(false);
+                      onExportExcel && onExportExcel(false);
+                    }}
+                  >
+                    <div className="export-item-header">
+                      <Download size={14} className="export-item-icon" />
+                      <span className="export-item-title">Export Current View</span>
+                    </div>
+                    <span className="export-item-desc">
+                      {sortedComplaints.length} records matching current stage & filters
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="export-dropdown-item"
+                    onClick={() => {
+                      setIsExportMenuOpen(false);
+                      onExportExcel && onExportExcel(true);
+                    }}
+                  >
+                    <div className="export-item-header">
+                      <FileSpreadsheet size={14} className="export-item-icon" />
+                      <span className="export-item-title">Export All Records</span>
+                    </div>
+                    <span className="export-item-desc">
+                      All complaints in register with complete photos
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* New Complaint Button - Functional for Sales team (Stage 01) and Warehouse team */}
           {canCreateComplaint && (

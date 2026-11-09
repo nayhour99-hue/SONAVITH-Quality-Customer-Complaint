@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Printer, Layers, Flame, Trash2, Building, Globe, CheckCircle2, ChevronRight, Info, Boxes, Archive, AlertCircle, PackageCheck } from 'lucide-react';
+import { canPrintInsightReport } from '../utils/permissions';
 
 // Helpers for Control Chart
 const STATUS_STYLES = {
@@ -162,7 +163,17 @@ function getDisposalHeatmapBg(qty, minQty, maxQty) {
   return `rgba(${r}, ${g}, ${b}, 0.08)`;
 }
 
-export default function InsightsView({ metrics, dateMode, complaints = [], searchQuery = '', timeFilter = 'All time', dateFilter = '' }) {
+export default function InsightsView({
+  metrics,
+  dateMode,
+  complaints = [],
+  searchQuery = '',
+  timeFilter = 'All time',
+  dateFilter = '',
+  userRole = 'Admin',
+  userPermissions = null,
+}) {
+  const isAuthorizedToPrint = canPrintInsightReport(userRole, userPermissions);
   const [controlChartPeriod, setControlChartPeriod] = useState('day');
   const [gaugeScope, setGaugeScope] = useState('customer'); // 'customer' | 'all'
 
@@ -1014,6 +1025,10 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   // 1. Print Executive Insights Report (PDF / Printable View with ALL Charts)
   // ---------------------------------------------------------------------------
   const handlePrintInsightsReport = () => {
+    if (!isAuthorizedToPrint) {
+      alert('Access Restricted: Printing overview insights & quality analysis is permitted for CEO, Admin, and QA only.');
+      return;
+    }
     let printWin = null;
     try {
       const esc = (val) =>
@@ -2311,32 +2326,34 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           </span>
         </div>
 
-        {/* Action Button: Print Report (PDF) with full visual charts */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button
-            type="button"
-            onClick={handlePrintInsightsReport}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 7,
-              padding: '8px 18px',
-              borderRadius: 8,
-              border: '1px solid #0f766e',
-              background: '#f0fdfa',
-              color: '#0f766e',
-              fontSize: '0.84rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(15, 118, 110, 0.15)',
-              transition: 'all 0.15s ease',
-            }}
-            title="Open comprehensive printable quality report with all visual charts and executive explanations (Print or Save as PDF)"
-          >
-            <Printer size={16} />
-            <span>Print Report (PDF)</span>
-          </button>
-        </div>
+        {/* Action Button: Print Report (PDF) - Authorized for CEO, Admin, and QA only */}
+        {isAuthorizedToPrint && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              type="button"
+              onClick={handlePrintInsightsReport}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 7,
+                padding: '8px 18px',
+                borderRadius: 8,
+                border: '1px solid #0f766e',
+                background: '#f0fdfa',
+                color: '#0f766e',
+                fontSize: '0.84rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: '0 1px 3px rgba(15, 118, 110, 0.15)',
+                transition: 'all 0.15s ease',
+              }}
+              title="Open comprehensive printable quality report with all visual charts and executive explanations (Print or Save as PDF)"
+            >
+              <Printer size={16} />
+              <span>Print Report (PDF)</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Top Row: Status Breakdown + Top Defect Types (Intake) + QA Confirmed Defect Types */}

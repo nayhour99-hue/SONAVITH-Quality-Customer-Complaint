@@ -23,6 +23,7 @@ import {
   Printer,
 } from 'lucide-react';
 import { uploadPhoto, getDefectTypes } from '../services/api';
+import { isStageOwner } from '../utils/permissions';
 
 function isVideoUrl(url) {
   if (!url) return false;
@@ -1156,7 +1157,10 @@ export default function StageActionModal({
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {(mode === 'view' || complaint.status === 'Closed') && (
+            {(mode === 'view' ||
+              complaint.status === 'Closed' ||
+              isStageOwner(mode, userRole, userPermissions) ||
+              ['admin', 'ceo', 'qa'].includes((userRole || '').trim().toLowerCase())) && (
               <button
                 type="button"
                 onClick={handlePrintReport}
