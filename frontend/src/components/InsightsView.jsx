@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Printer, Layers, Flame, Trash2, Building, Globe, CheckCircle2, ChevronRight, Info } from 'lucide-react';
+import { Printer, Layers, Flame, Trash2, Building, Globe, CheckCircle2, ChevronRight, Info, Boxes, Archive, AlertCircle, PackageCheck } from 'lucide-react';
 
 // Helpers for Control Chart
 const STATUS_STYLES = {
@@ -175,6 +175,10 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   const [disposalScope, setDisposalScope] = useState('all'); // 'all' | 'closed' | 'pending'
   const [disposalClusterView, setDisposalClusterView] = useState('all'); // 'all' | 'physical' | 'virtual'
   const [hoveredHeatmapTile, setHoveredHeatmapTile] = useState(null);
+
+  // Remaining stock not on write-off state
+  const [remainingStockStageFilter, setRemainingStockStageFilter] = useState('all'); // 'all' | 'pending_qa' | 'pending_approval' | 'completed'
+  const [remainingStockSearch, setRemainingStockSearch] = useState('');
   // Compute filtered complaints based on search, time, and date filters
   const filteredComplaints = useMemo(() => {
     let data = complaints;
@@ -823,6 +827,135 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   }, [filteredComplaints, disposalScope]);
 
   // ---------------------------------------------------------------------------
+  // Remaining Stock Not on Write-Off Yet Data
+  // Identifies stock across complaints that has NOT been written off / disposed yet.
+  // Grouped by Batch (Manufacturing Code + Production Batch) with full product ID and quantity details.
+  // ---------------------------------------------------------------------------
+  const remainingStockData = useMemo(() => {
+    const batchesMap = {};
+    let totalRemainingQty = 0;
+    let totalReworkQty = 0;
+    let totalIncidentsCount = 0;
+    let pendingQaQty = 0;
+    let pendingApprovalQty = 0;
+    let completedExchangedQty = 0;
+    let approvedQty = 0;
+
+    filteredComplaints.forEach((c) => {
+      const sr = c.stock_return || {};
+      const disp = c.disposal || {};
+
+      const defQty = parseFloat(c.defect_quantity || 0);
+      const confirmedWo = parseFloat(sr.confirmed_write_off_quantity || 0);
+      const dispQty = parseFloat(disp.disposed_quantity || 0);
+      const isClosedDisposal = disp.status === 'Closed' || c.status === 'Closed';
+
+      let writtenOffQty = 0;
+      if (isClosedDisposal) {
+        writtenOffQty = dispQty > 0 ? dispQty : confirmedWo;
+      } else if (confirmedWo > 0 && sr.qa_signed_off === 'Yes') {
+        writtenOffQty = confirmedWo;
+      }
+
+      // Quantity remaining not written off yet
+      const remainingQty = isClosedDisposal ? Math.max(0, defQty - writtenOffQty) : defQty;
+      const reworkQty = parseFloat(sr.confirmed_rework_quantity || sr.physical_rework_quantity || 0);
+
+      if (remainingQty <= 0 && reworkQty <= 0) {
+        return; // Fully disposed/written off with no rework
+      }
+
+      // Filter by stage if selected
+      const status = c.status || 'Pending QA';
+      if (remainingStockStageFilter === 'pending_qa' && status !== 'Pending QA') return;
+      if (remainingStockStageFilter === 'pending_approval' && status !== 'Pending approval') return;
+      if (remainingStockStageFilter === 'completed' && status !== 'Completed' && status !== 'Approved') return;
+
+      const mfg = (c.manufacturing_code || 'N/A').trim();
+      const batch = (c.production_batch || 'General').trim();
+      const batchKey = mfg !== 'N/A' && batch !== 'General' ? `${mfg} - ${batch}` : (mfg !== 'N/A' ? mfg : batch);
+
+      const prodId = c.product_id || c.product_short_code || 'SKU-UNASSIGNED';
+      const prodName = c.product_name || 'Unspecified Product';
+      const uom = c.uom || 'units';
+
+      // Quick search filter
+      if (remainingStockSearch) {
+        const q = remainingStockSearch.toLowerCase();
+        const matchesBatch = batchKey.toLowerCase().includes(q);
+        const matchesProd = prodName.toLowerCase().includes(q) || prodId.toLowerCase().includes(q);
+        const matchesId = (c.id || '').toLowerCase().includes(q);
+        if (!matchesBatch && !matchesProd && !matchesId) return;
+      }
+
+      if (!batchesMap[batchKey]) {
+        batchesMap[batchKey] = {
+          batchKey,
+          mfgCode: mfg,
+          productionBatch: batch,
+          totalQty: 0,
+          totalReworkQty: 0,
+          complaintsCount: 0,
+          productsMap: {},
+        };
+      }
+
+      batchesMap[batchKey].totalQty += remainingQty;
+      batchesMap[batchKey].totalReworkQty += reworkQty;
+      batchesMap[batchKey].complaintsCount += 1;
+      totalRemainingQty += remainingQty;
+      totalReworkQty += reworkQty;
+      totalIncidentsCount += 1;
+
+      if (status === 'Pending QA') pendingQaQty += remainingQty;
+      else if (status === 'Pending approval') pendingApprovalQty += remainingQty;
+      else if (status === 'Completed') completedExchangedQty += remainingQty;
+      else if (status === 'Approved') approvedQty += remainingQty;
+
+      // Group by Product ID within the batch
+      if (!batchesMap[batchKey].productsMap[prodId]) {
+        batchesMap[batchKey].productsMap[prodId] = {
+          productId: prodId,
+          productName: prodName,
+          uom,
+          quantity: 0,
+          reworkQty: 0,
+          incidents: [],
+          locations: new Set(),
+          statuses: new Set(),
+        };
+      }
+      batchesMap[batchKey].productsMap[prodId].quantity += remainingQty;
+      batchesMap[batchKey].productsMap[prodId].reworkQty += reworkQty;
+      batchesMap[batchKey].productsMap[prodId].incidents.push({
+        id: c.id,
+        quantity: remainingQty,
+        status,
+        customer: c.customer_name || 'Internal Warehouse',
+        location: sr.bin_location || c.customer_location || 'Warehouse Quarantine',
+        defectType: c.defect_type || 'Defective Stock',
+      });
+      if (sr.bin_location) batchesMap[batchKey].productsMap[prodId].locations.add(sr.bin_location);
+      if (c.customer_location) batchesMap[batchKey].productsMap[prodId].locations.add(c.customer_location);
+      batchesMap[batchKey].productsMap[prodId].statuses.add(status);
+    });
+
+    const batchList = Object.values(batchesMap).sort((a, b) => b.totalQty - a.totalQty);
+
+    return {
+      batches: batchList,
+      totalBatches: batchList.length,
+      totalRemainingQty,
+      totalReworkQty,
+      totalIncidentsCount,
+      pendingQaQty,
+      pendingApprovalQty,
+      completedExchangedQty,
+      approvedQty,
+    };
+  }, [filteredComplaints, remainingStockStageFilter, remainingStockSearch]);
+
+  // ---------------------------------------------------------------------------
   // 1. Print Executive Insights Report (PDF / Printable View with ALL Charts)
   // ---------------------------------------------------------------------------
   const handlePrintInsightsReport = () => {
@@ -1266,6 +1399,75 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
                 ${virtCards.length > 0 ? virtCards : '<div style="font-size:8px;color:#94a3b8;font-style:italic;">No virtual write-off items</div>'}
               </div>
             </div>
+          </div>
+        `;
+      }).join('');
+    };
+
+    // 8. Remaining Stock Not on Write-Off Print HTML Generator
+    const generateRemainingStockPrintHtml = () => {
+      if (!remainingStockData.batches || remainingStockData.batches.length === 0) {
+        return '<div style="padding:16px;text-align:center;color:#64748b;font-size:10px;">Zero unwritten defect stock remaining in active inventory.</div>';
+      }
+
+      return remainingStockData.batches.map((batch) => {
+        const prodItems = Object.values(batch.productsMap);
+        const rows = prodItems.map((prod) => {
+          const reworkTxt = prod.reworkQty > 0 ? ` <span style="color:#059669;font-size:8px;">(+${prod.reworkQty} rework)</span>` : '';
+          const statusList = Array.from(prod.statuses).join(', ');
+          const locList = Array.from(prod.locations).slice(0, 2).join(' / ');
+          const claimIds = prod.incidents.map(i => i.id).join(', ');
+
+          return `
+            <tr>
+              <td style="font-family:monospace;font-weight:700;color:#0f172a;font-size:9.5px;">${esc(prod.productId)}</td>
+              <td>
+                <div style="font-weight:700;color:#0f172a;font-size:10px;">${esc(prod.productName)}</div>
+                <div style="font-size:8px;color:#64748b;margin-top:1px;">Claims: ${esc(claimIds)}</div>
+              </td>
+              <td>
+                <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:700;background:#fef3c7;color:#92400e;">
+                  ${esc(statusList)}
+                </span>
+              </td>
+              <td style="font-size:8.5px;color:#475569;">${esc(locList || 'Warehouse Quarantine')}</td>
+              <td style="text-align:right;font-weight:800;color:#b91c1c;font-size:10px;">
+                ${prod.quantity.toLocaleString()} ${esc(prod.uom)}${reworkTxt}
+              </td>
+            </tr>
+          `;
+        }).join('');
+
+        return `
+          <div style="border:1px solid #cbd5e1;border-radius:8px;margin-bottom:12px;background:#ffffff;overflow:hidden;">
+            <div style="background:#f8fafc;border-bottom:1px solid #cbd5e1;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-family:monospace;font-size:10.5px;font-weight:800;background:#0f172a;color:#ffffff;padding:2px 8px;border-radius:4px;">
+                  Batch: ${esc(batch.batchKey)}
+                </span>
+                <span style="font-size:9px;color:#64748b;">${batch.complaintsCount} incident(s)</span>
+              </div>
+              <div>
+                <span style="font-size:10.5px;font-weight:800;color:#0f172a;">
+                  Batch Unwritten: <strong style="color:#d97706;">${batch.totalQty.toLocaleString()} units</strong>
+                  ${batch.totalReworkQty > 0 ? `<span style="font-size:9px;color:#059669;margin-left:4px;">(+${batch.totalReworkQty} rework)</span>` : ''}
+                </span>
+              </div>
+            </div>
+            <table class="data-table" style="margin:0;border:none;">
+              <thead>
+                <tr style="background:#f1f5f9;">
+                  <th style="width:130px;">Product ID</th>
+                  <th>Product Description</th>
+                  <th style="width:120px;">Holding Stage</th>
+                  <th>Quarantine Location</th>
+                  <th style="text-align:right;width:110px;">Remaining QTY</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>
           </div>
         `;
       }).join('');
@@ -1925,10 +2127,48 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 8: Corrective & Preventative Actions (CAPA) -->
+  <!-- Section 8: Remaining Stock Not on Write-Off Yet (Active Quarantine & Pipeline Inventory) -->
+  <div class="section-card">
+    <div class="section-title">
+      <span>8. Remaining Stock Not on Write-Off Yet (Active Quarantine & Pipeline Inventory)</span>
+      <span style="font-size:9.5px;color:#d97706;font-weight:700;">${remainingStockData.totalRemainingQty.toLocaleString()} Units Pending Across ${remainingStockData.totalBatches} Batches</span>
+    </div>
+
+    <!-- Summary KPI Cards -->
+    <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;margin-bottom:12px;">
+      <div style="border:1px solid #fed7aa;border-radius:6px;padding:8px 10px;background:#fffaf0;text-align:center;">
+        <div style="font-size:8px;color:#9a3412;font-weight:700;text-transform:uppercase;">Total Unwritten Defect Stock</div>
+        <div style="font-size:15px;font-weight:900;color:#c2410c;margin-top:2px;">${remainingStockData.totalRemainingQty.toLocaleString()} <span style="font-size:8.5px;">units</span></div>
+        <div style="font-size:7.5px;color:#78350f;">Across ${remainingStockData.totalIncidentsCount} active claims</div>
+      </div>
+      <div style="border:1px solid #fecaca;border-radius:6px;padding:8px 10px;background:#fef2f2;text-align:center;">
+        <div style="font-size:8px;color:#991b1b;font-weight:700;text-transform:uppercase;">Quarantined in Facility (Stage 2)</div>
+        <div style="font-size:15px;font-weight:900;color:#dc2626;margin-top:2px;">${remainingStockData.pendingQaQty.toLocaleString()} <span style="font-size:8.5px;">units</span></div>
+        <div style="font-size:7.5px;color:#991b1b;">Pending QA Inspection</div>
+      </div>
+      <div style="border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;background:#eff6ff;text-align:center;">
+        <div style="font-size:8px;color:#1e40af;font-weight:700;text-transform:uppercase;">Executive Decision (Stage 3)</div>
+        <div style="font-size:15px;font-weight:900;color:#2563eb;margin-top:2px;">${remainingStockData.pendingApprovalQty.toLocaleString()} <span style="font-size:8.5px;">units</span></div>
+        <div style="font-size:7.5px;color:#1e40af;">Pending CEO Approval</div>
+      </div>
+      <div style="border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px;background:#f0fdf4;text-align:center;">
+        <div style="font-size:8px;color:#166534;font-weight:700;text-transform:uppercase;">Warehouse Exchanged (Stage 4)</div>
+        <div style="font-size:15px;font-weight:900;color:#15803d;margin-top:2px;">${remainingStockData.completedExchangedQty.toLocaleString()} <span style="font-size:8.5px;">units</span></div>
+        <div style="font-size:7.5px;color:#166534;">Awaiting Stage 5 Return</div>
+      </div>
+    </div>
+
+    ${generateRemainingStockPrintHtml()}
+
+    <div class="explanation-box" style="background:#fffbeb;border-left:3.5px solid #d97706;color:#92400e;">
+      <strong>Pipeline Inventory Governance:</strong> A total of <strong>${remainingStockData.totalRemainingQty.toLocaleString()} units</strong> across <strong>${remainingStockData.totalBatches} production batches</strong> represent active quality defect inventory not yet closed into Stage 06 Write-Off. The bulk volume is dominated by Batch <em>MAC - 12:00 AM to 19:00 PM (6,500 units)</em> from internal container destuffing damage currently secured under quarantine protocol. Remaining units proceed through Stage 03 CEO sign-off and Stage 04 warehouse physical replacements prior to final tax batching.
+    </div>
+  </div>
+
+  <!-- Section 9: Corrective & Preventative Actions (CAPA) -->
   <div class="section-card" style="background:#fefce8;border-color:#fde047;">
     <div class="section-title" style="color:#854d0e;border-color:#fef08a;">
-      <span>8. Strategic Quality Action Plan (CAPA)</span>
+      <span>9. Strategic Quality Action Plan (CAPA)</span>
       <span style="font-size:9.5px;color:#854d0e;font-weight:700;">Mandatory Quality Directives</span>
     </div>
     <div style="font-size:10.5px;color:#713f12;line-height:1.55;">
@@ -4167,6 +4407,348 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
         ) : (
           <div style={{ padding: '28px 0', textAlign: 'center', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
             No disposal or write-off records matching the selected scope.
+          </div>
+        )}
+      </div>
+
+      {/* =========================================================================
+          Card 10: Remaining Stock Not on Write-Off Yet
+          Comprehensive audit of stock across production batches not yet closed into Stage 05/06 write-off.
+          Which batch, product ID, and quantity in detail.
+         ========================================================================= */}
+      <div className="insight-card" style={{ marginTop: 20 }}>
+        {/* Card Header & Controls */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Boxes size={20} style={{ color: '#d97706' }} />
+              <h3 className="insight-card-title">Remaining Stock Not on Write-Off Yet</h3>
+              <span
+                style={{
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  color: '#b45309',
+                  background: '#fef3c7',
+                  border: '1px solid #fde68a',
+                  padding: '2px 8px',
+                  borderRadius: '9999px',
+                  letterSpacing: '0.02em',
+                }}
+              >
+                ACTIVE INVENTORY • PENDING DISPOSAL
+              </span>
+            </div>
+            <div className="insight-card-subtitle" style={{ marginTop: 4 }}>
+              Active defective, quarantined, or exchanged stock across production batches that have <strong>NOT been written off or disposed yet</strong> in Stage 05/06. Detail of batch, product ID, status, and physical location.
+            </div>
+          </div>
+
+          {/* Controls: Filter by Workflow Stage & Quick Search */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 600 }}>Stage:</span>
+              <div className="time-pills">
+                <button
+                  type="button"
+                  className={`pill-btn ${remainingStockStageFilter === 'all' ? 'active' : ''}`}
+                  onClick={() => setRemainingStockStageFilter('all')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  All Active
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${remainingStockStageFilter === 'pending_qa' ? 'active' : ''}`}
+                  onClick={() => setRemainingStockStageFilter('pending_qa')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  Stage 2: Pending QA
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${remainingStockStageFilter === 'pending_approval' ? 'active' : ''}`}
+                  onClick={() => setRemainingStockStageFilter('pending_approval')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  Stage 3: Pending Approval
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${remainingStockStageFilter === 'completed' ? 'active' : ''}`}
+                  onClick={() => setRemainingStockStageFilter('completed')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  Stage 4: Exchanged
+                </button>
+              </div>
+            </div>
+
+            <div style={{ minWidth: 160 }}>
+              <input
+                type="text"
+                placeholder="Search batch or SKU..."
+                value={remainingStockSearch}
+                onChange={(e) => setRemainingStockSearch(e.target.value)}
+                style={{
+                  fontSize: '0.75rem',
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  border: '1px solid #cbd5e1',
+                  outline: 'none',
+                  width: '100%',
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Executive KPI Summary Row */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 12,
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase' }}>Total Unwritten Stock</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#b45309', marginTop: 2 }}>
+              {remainingStockData.totalRemainingQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#92400e', marginTop: 2 }}>Across {remainingStockData.totalBatches} batches ({remainingStockData.totalIncidentsCount} claims)</div>
+          </div>
+
+          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#991b1b', fontWeight: 700, textTransform: 'uppercase' }}>Quarantined in Facility (Stage 2)</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#dc2626', marginTop: 2 }}>
+              {remainingStockData.pendingQaQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#991b1b', marginTop: 2 }}>Pending QA temperature/acidity test</div>
+          </div>
+
+          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#1e40af', fontWeight: 700, textTransform: 'uppercase' }}>Executive Review (Stage 3)</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#2563eb', marginTop: 2 }}>
+              {remainingStockData.pendingApprovalQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#1e40af', marginTop: 2 }}>Awaiting CEO compensation decision</div>
+          </div>
+
+          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#166534', fontWeight: 700, textTransform: 'uppercase' }}>Exchanged / Retained (Stage 4 & 5)</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#15803d', marginTop: 2 }}>
+              {remainingStockData.completedExchangedQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#166534', marginTop: 2 }}>
+              Replacement sent {remainingStockData.totalReworkQty > 0 ? `• ${remainingStockData.totalReworkQty} in rework` : ''}
+            </div>
+          </div>
+        </div>
+
+        {/* Detailed Batches List */}
+        {remainingStockData.batches.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {remainingStockData.batches.map((batch) => {
+              const prodList = Object.values(batch.productsMap);
+
+              return (
+                <div
+                  key={`rem-batch-${batch.batchKey}`}
+                  style={{
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 8,
+                    background: 'var(--color-bg-card, #ffffff)',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Batch Header Bar */}
+                  <div
+                    style={{
+                      background: '#f8fafc',
+                      borderBottom: '1px solid #e2e8f0',
+                      padding: '10px 14px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span
+                        style={{
+                          fontFamily: 'monospace',
+                          fontSize: '0.88rem',
+                          fontWeight: 800,
+                          background: '#0f172a',
+                          color: '#ffffff',
+                          padding: '3px 10px',
+                          borderRadius: 6,
+                          letterSpacing: '0.02em',
+                        }}
+                      >
+                        Batch: {batch.batchKey}
+                      </span>
+                      <span style={{ fontSize: '0.76rem', color: '#64748b', fontWeight: 600 }}>
+                        {batch.complaintsCount} incident(s) logged
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      {batch.totalReworkQty > 0 && (
+                        <span
+                          style={{
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            color: '#065f46',
+                            background: '#d1fae5',
+                            padding: '3px 8px',
+                            borderRadius: 6,
+                          }}
+                        >
+                          ♻️ {batch.totalReworkQty} unit(s) Rework
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontSize: '0.88rem',
+                          fontWeight: 900,
+                          background: '#fef3c7',
+                          color: '#92400e',
+                          border: '1px solid #fde68a',
+                          padding: '3px 10px',
+                          borderRadius: 6,
+                        }}
+                      >
+                        Total Unwritten: {batch.totalQty.toLocaleString()} units
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Products Table inside this Batch */}
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="data-table" style={{ margin: 0, border: 'none', width: '100%' }}>
+                      <thead>
+                        <tr style={{ background: '#fdfdfd', fontSize: '0.74rem', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
+                          <th style={{ width: 140, padding: '8px 12px' }}>Product ID</th>
+                          <th style={{ padding: '8px 12px' }}>Product Description</th>
+                          <th style={{ width: 140, padding: '8px 12px' }}>Workflow Stage</th>
+                          <th style={{ padding: '8px 12px' }}>Holding / Return Location</th>
+                          <th style={{ width: 150, textAlign: 'right', padding: '8px 12px' }}>Remaining QTY</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prodList.map((prod) => {
+                          const statusList = Array.from(prod.statuses);
+                          const locList = Array.from(prod.locations).slice(0, 2).join(' / ');
+                          const claimIds = prod.incidents.map((i) => i.id).join(', ');
+
+                          return (
+                            <tr key={`rem-prod-${batch.batchKey}-${prod.productId}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                              <td style={{ verticalAlign: 'top', padding: '10px 12px' }}>
+                                <span
+                                  style={{
+                                    fontFamily: 'monospace',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 800,
+                                    background: '#ffffff',
+                                    color: '#0f172a',
+                                    padding: '2px 6px',
+                                    borderRadius: 4,
+                                    border: '1px solid #cbd5e1',
+                                    display: 'inline-block',
+                                  }}
+                                >
+                                  {prod.productId}
+                                </span>
+                              </td>
+                              <td style={{ verticalAlign: 'top', padding: '10px 12px' }}>
+                                <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f172a' }}>
+                                  {prod.productName}
+                                </div>
+                                <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>
+                                  Linked Claims: <strong style={{ color: '#475569' }}>{claimIds}</strong>
+                                </div>
+                              </td>
+                              <td style={{ verticalAlign: 'top', padding: '10px 12px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  {statusList.map((st) => (
+                                    <span
+                                      key={`st-${st}`}
+                                      style={{
+                                        display: 'inline-block',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 700,
+                                        padding: '2px 8px',
+                                        borderRadius: 4,
+                                        background:
+                                          st === 'Pending QA'
+                                            ? '#fef3c7'
+                                            : st === 'Pending approval'
+                                            ? '#eff6ff'
+                                            : st === 'Approved'
+                                            ? '#f0fdf4'
+                                            : st === 'Completed'
+                                            ? '#f0fdf4'
+                                            : '#f1f5f9',
+                                        color:
+                                          st === 'Pending QA'
+                                            ? '#92400e'
+                                            : st === 'Pending approval'
+                                            ? '#1e40af'
+                                            : st === 'Approved'
+                                            ? '#166534'
+                                            : st === 'Completed'
+                                            ? '#15803d'
+                                            : '#475569',
+                                        width: 'fit-content',
+                                      }}
+                                    >
+                                      {st}
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                              <td style={{ verticalAlign: 'top', padding: '10px 12px', fontSize: '0.76rem', color: '#475569' }}>
+                                <div>📍 {locList || 'Warehouse Quarantine'}</div>
+                              </td>
+                              <td style={{ verticalAlign: 'top', textAlign: 'right', padding: '10px 12px' }}>
+                                <div
+                                  style={{
+                                    display: 'inline-block',
+                                    fontWeight: 900,
+                                    fontSize: '1.02rem',
+                                    color: '#b91c1c',
+                                    background: '#fef2f2',
+                                    border: '1px solid #fecaca',
+                                    padding: '3px 8px',
+                                    borderRadius: 6,
+                                  }}
+                                >
+                                  {prod.quantity.toLocaleString()}{' '}
+                                  <span style={{ fontSize: '0.74rem', fontWeight: 600 }}>{prod.uom}</span>
+                                </div>
+                                {prod.reworkQty > 0 && (
+                                  <div style={{ fontSize: '0.7rem', color: '#059669', fontWeight: 700, marginTop: 2 }}>
+                                    +{prod.reworkQty} in rework
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ padding: '24px 0', textAlign: 'center', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
+            No unwritten defect stock found matching the filter criteria.
           </div>
         )}
       </div>
