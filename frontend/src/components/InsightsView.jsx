@@ -1003,6 +1003,10 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
       stage5ExchangedQty,
       facilityQuarantineQty,
       pendingIntakeReviewQty,
+      // Backwards-compatible aliases:
+      pendingQaQty: facilityQuarantineQty,
+      pendingApprovalQty: pendingIntakeReviewQty,
+      completedExchangedQty: stage5ExchangedQty,
     };
   }, [filteredComplaints, remainingStockScope, remainingStockStageFilter, remainingStockSearch]);
 
@@ -1010,19 +1014,23 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   // 1. Print Executive Insights Report (PDF / Printable View with ALL Charts)
   // ---------------------------------------------------------------------------
   const handlePrintInsightsReport = () => {
-    const esc = (val) =>
-      val === undefined || val === null || val === ''
-        ? '—'
-        : String(val)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+    let printWin = null;
+    try {
+      const esc = (val) =>
+        val === undefined || val === null || val === ''
+          ? '—'
+          : String(val)
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
 
-    const printWin = window.open('', '_blank', 'width=1080,height=920');
-    if (!printWin) {
-      window.print();
-      return;
-    }
+      const fmt = (val) => (Number(val) || 0).toLocaleString();
+
+      printWin = window.open('', '_blank', 'width=1080,height=920');
+      if (!printWin) {
+        window.print();
+        return;
+      }
 
     const todayStr = new Date().toLocaleDateString('en-US', {
       year: 'numeric',
@@ -2182,37 +2190,37 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   <div class="section-card">
     <div class="section-title">
       <span>8. Remaining Stock Not on Write-Off Yet (Active Quarantine & Pipeline Inventory)</span>
-      <span style="font-size:9.5px;color:#d97706;font-weight:700;">${remainingStockData.totalRemainingQty.toLocaleString()} Units Pending Across ${remainingStockData.totalBatches} Batches</span>
+      <span style="font-size:9.5px;color:#d97706;font-weight:700;">${fmt(remainingStockData.totalRemainingQty)} Units Pending Across ${fmt(remainingStockData.totalBatches)} Batches</span>
     </div>
 
     <!-- Summary KPI Cards -->
     <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;margin-bottom:12px;">
-      <div style="border:1px solid #fed7aa;border-radius:6px;padding:8px 10px;background:#fffaf0;text-align:center;">
-        <div style="font-size:8px;color:#9a3412;font-weight:700;text-transform:uppercase;">Total Unwritten Defect Stock</div>
-        <div style="font-size:15px;font-weight:900;color:#c2410c;margin-top:2px;">${remainingStockData.totalRemainingQty.toLocaleString()} <span style="font-size:8.5px;">units</span></div>
-        <div style="font-size:7.5px;color:#78350f;">Across ${remainingStockData.totalIncidentsCount} active claims</div>
-      </div>
-      <div style="border:1px solid #fecaca;border-radius:6px;padding:8px 10px;background:#fef2f2;text-align:center;">
-        <div style="font-size:8px;color:#991b1b;font-weight:700;text-transform:uppercase;">Quarantined in Facility (Stage 2)</div>
-        <div style="font-size:15px;font-weight:900;color:#dc2626;margin-top:2px;">${remainingStockData.pendingQaQty.toLocaleString()} <span style="font-size:8.5px;">units</span></div>
-        <div style="font-size:7.5px;color:#991b1b;">Pending QA Inspection</div>
-      </div>
-      <div style="border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;background:#eff6ff;text-align:center;">
-        <div style="font-size:8px;color:#1e40af;font-weight:700;text-transform:uppercase;">Executive Decision (Stage 3)</div>
-        <div style="font-size:15px;font-weight:900;color:#2563eb;margin-top:2px;">${remainingStockData.pendingApprovalQty.toLocaleString()} <span style="font-size:8.5px;">units</span></div>
-        <div style="font-size:7.5px;color:#1e40af;">Pending CEO Approval</div>
+      <div style="border:1px solid #fde68a;border-radius:6px;padding:8px 10px;background:#fffaf0;text-align:center;">
+        <div style="font-size:8px;color:#92400e;font-weight:700;text-transform:uppercase;">⚡ Open Disposal Action</div>
+        <div style="font-size:15px;font-weight:900;color:#b45309;margin-top:2px;">${fmt(remainingStockData.openDisposalQty)} <span style="font-size:8.5px;">units</span></div>
+        <div style="font-size:7.5px;color:#92400e;">Disposal Action Pending / Open</div>
       </div>
       <div style="border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px;background:#f0fdf4;text-align:center;">
-        <div style="font-size:8px;color:#166534;font-weight:700;text-transform:uppercase;">Warehouse Exchanged (Stage 4)</div>
-        <div style="font-size:15px;font-weight:900;color:#15803d;margin-top:2px;">${remainingStockData.completedExchangedQty.toLocaleString()} <span style="font-size:8.5px;">units</span></div>
-        <div style="font-size:7.5px;color:#166534;">Awaiting Stage 5 Return</div>
+        <div style="font-size:8px;color:#166534;font-weight:700;text-transform:uppercase;">Stage 4/5 Exchanged / Return</div>
+        <div style="font-size:15px;font-weight:900;color:#15803d;margin-top:2px;">${fmt(remainingStockData.stage5ExchangedQty)} <span style="font-size:8.5px;">units</span></div>
+        <div style="font-size:7.5px;color:#166534;">Awaiting Stage 6 Disposal</div>
+      </div>
+      <div style="border:1px solid #fecaca;border-radius:6px;padding:8px 10px;background:#fef2f2;text-align:center;">
+        <div style="font-size:8px;color:#991b1b;font-weight:700;text-transform:uppercase;">Facility Quarantined (Stage 2)</div>
+        <div style="font-size:15px;font-weight:900;color:#dc2626;margin-top:2px;">${fmt(remainingStockData.facilityQuarantineQty || remainingStockData.pendingQaQty)} <span style="font-size:8.5px;">units</span></div>
+        <div style="font-size:7.5px;color:#991b1b;">Destuffing cold room quarantine</div>
+      </div>
+      <div style="border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;background:#eff6ff;text-align:center;">
+        <div style="font-size:8px;color:#1e40af;font-weight:700;text-transform:uppercase;">Customer Review (Stage 3)</div>
+        <div style="font-size:15px;font-weight:900;color:#2563eb;margin-top:2px;">${fmt(remainingStockData.pendingIntakeReviewQty || remainingStockData.pendingApprovalQty)} <span style="font-size:8.5px;">units</span></div>
+        <div style="font-size:7.5px;color:#1e40af;">Awaiting CEO Decision</div>
       </div>
     </div>
 
     ${generateRemainingStockPrintHtml()}
 
     <div class="explanation-box" style="background:#fffbeb;border-left:3.5px solid #d97706;color:#92400e;">
-      <strong>Pipeline Inventory Governance:</strong> A total of <strong>${remainingStockData.totalRemainingQty.toLocaleString()} units</strong> across <strong>${remainingStockData.totalBatches} production batches</strong> represent active quality defect inventory not yet closed into Stage 06 Write-Off. The bulk volume is dominated by Batch <em>MAC - 12:00 AM to 19:00 PM (6,500 units)</em> from internal container destuffing damage currently secured under quarantine protocol. Remaining units proceed through Stage 03 CEO sign-off and Stage 04 warehouse physical replacements prior to final tax batching.
+      <strong>Pipeline Inventory Governance:</strong> A total of <strong>${fmt(remainingStockData.totalRemainingQty)} units</strong> across <strong>${fmt(remainingStockData.totalBatches)} production batches</strong> represent active quality defect inventory not yet closed into Stage 06 Write-Off. The bulk volume is dominated by Batch <em>MAC - 12:00 AM to 19:00 PM (6,500 units)</em> from internal container destuffing damage currently secured under quarantine protocol. Remaining units proceed through Stage 03 CEO sign-off and Stage 04 warehouse physical replacements prior to final tax batching.
     </div>
   </div>
 
@@ -2252,13 +2260,33 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
 </body>
 </html>`;
 
-    printWin.document.open();
-    printWin.document.write(html);
-    printWin.document.close();
-    printWin.focus();
-    setTimeout(() => {
-      printWin.print();
-    }, 280);
+      if (printWin) {
+        printWin.document.open();
+        printWin.document.write(html);
+        printWin.document.close();
+        printWin.focus();
+        setTimeout(() => {
+          try {
+            printWin.print();
+          } catch (e) {
+            console.warn('Print window print dialog trigger caught:', e);
+          }
+        }, 280);
+      }
+    } catch (err) {
+      console.error('Error generating insights print report:', err);
+      if (printWin && !printWin.closed) {
+        printWin.document.open();
+        printWin.document.write(`<!DOCTYPE html><html><body style="font-family:sans-serif;padding:32px;color:#b91c1c;">
+          <h2 style="margin:0 0 8px;">Unable to render Print Report</h2>
+          <p style="color:#475569;font-size:14px;">An unexpected error occurred while preparing the report:</p>
+          <pre style="background:#f1f5f9;padding:12px;border-radius:6px;font-size:12px;color:#0f172a;overflow:auto;">${err?.stack || err?.message || String(err)}</pre>
+        </body></html>`);
+        printWin.document.close();
+      } else {
+        alert('Could not generate print report: ' + (err?.message || 'Unknown error'));
+      }
+    }
   };
 
   return (
