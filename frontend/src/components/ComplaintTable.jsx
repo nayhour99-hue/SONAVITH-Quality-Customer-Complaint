@@ -594,18 +594,16 @@ export default function ComplaintTable({
                   )}
                   <span>{isExporting ? 'Exporting...' : 'Export Excel'}</span>
                 </button>
-                {(userRole === 'Admin' || userRole === 'CEO' || (userRole === 'QA' && isOverviewTab)) && (
-                  <button
-                    type="button"
-                    className="btn-export-dropdown-toggle"
-                    onClick={() => setIsExportMenuOpen((prev) => !prev)}
-                    disabled={isExporting}
-                    title="Export options (current view or full archive)"
-                    aria-label="Export options"
-                  >
-                    <ChevronDown size={14} />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn-export-dropdown-toggle"
+                  onClick={() => setIsExportMenuOpen((prev) => !prev)}
+                  disabled={isExporting}
+                  title="Export options (current stage view or archive)"
+                  aria-label="Export options"
+                >
+                  <ChevronDown size={14} />
+                </button>
               </div>
 
               {isExportMenuOpen && (
@@ -631,15 +629,21 @@ export default function ComplaintTable({
                     className="export-dropdown-item"
                     onClick={() => {
                       setIsExportMenuOpen(false);
-                      onExportExcel && onExportExcel(true);
+                      onExportExcel && onExportExcel(userRole === 'Admin' || userRole === 'CEO');
                     }}
                   >
                     <div className="export-item-header">
                       <FileSpreadsheet size={14} className="export-item-icon" />
-                      <span className="export-item-title">Export All Records</span>
+                      <span className="export-item-title">
+                        {userRole === 'Admin' || userRole === 'CEO'
+                          ? 'Export All Records'
+                          : 'Export All Stage Records'}
+                      </span>
                     </div>
                     <span className="export-item-desc">
-                      All complaints in register with complete photos
+                      {userRole === 'Admin' || userRole === 'CEO'
+                        ? 'All complaints in register with complete photos'
+                        : `All active records for ${currentTab === 'overview' ? 'overview register' : currentTab}`}
                     </span>
                   </button>
                 </div>

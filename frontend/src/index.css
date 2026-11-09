@@ -632,10 +632,8 @@ a:hover {
   background: #ffffff;
   color: var(--color-brand);
   border: 1px solid var(--color-brand);
-  border-right: none;
   padding: 8px 14px;
-  border-top-left-radius: var(--radius-sm);
-  border-bottom-left-radius: var(--radius-sm);
+  border-radius: var(--radius-sm);
   font-size: 0.86rem;
   font-weight: 600;
   display: flex;
@@ -644,6 +642,21 @@ a:hover {
   cursor: pointer;
   transition: all 0.15s ease;
   font-family: inherit;
+}
+
+/* When followed by a dropdown toggle in a split button, seamlessly merge */
+.export-excel-split-btn:has(.btn-export-dropdown-toggle) .btn-export-excel,
+.export-excel-split-btn > .btn-export-excel:first-child:not(:last-child) {
+  border-right: none;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Guarantee a fully enclosed rounded border when rendered standalone without a toggle */
+.export-excel-split-btn > .btn-export-excel:only-child,
+.btn-export-excel:only-child {
+  border-right: 1px solid var(--color-brand) !important;
+  border-radius: var(--radius-sm) !important;
 }
 
 .btn-export-excel:hover:not(:disabled) {
