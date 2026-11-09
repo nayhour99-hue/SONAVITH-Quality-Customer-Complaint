@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Printer } from 'lucide-react';
+import { Printer, Layers, Flame, Trash2, Building, Globe, CheckCircle2, ChevronRight, Info } from 'lucide-react';
 
 // Helpers for Control Chart
 const STATUS_STYLES = {
@@ -94,6 +94,74 @@ function getPeriodKey(dateStr, period) {
   return dateStr;
 }
 
+// ---------------------------------------------------------------------------
+// Heatmap dynamic color interpolator for Disposal Summary:
+// Blue (#1d4ed8 / #2563eb) for lowest write-off QTY -> Crimson Red (#b91c1c) for highest write-off QTY
+// ---------------------------------------------------------------------------
+function getDisposalHeatmapColor(qty, minQty, maxQty) {
+  const min = Number(minQty) || 0;
+  const max = Number(maxQty) || 1;
+  const val = Number(qty) || 0;
+  if (max <= min) return '#2563eb';
+  const ratio = Math.max(0, Math.min(1, (val - min) / (max - min)));
+
+  let r, g, b;
+  if (ratio <= 0.25) {
+    const t = ratio / 0.25;
+    r = Math.round(37 + (2 - 37) * t);
+    g = Math.round(99 + (132 - 99) * t);
+    b = Math.round(235 + (199 - 235) * t);
+  } else if (ratio <= 0.5) {
+    const t = (ratio - 0.25) / 0.25;
+    r = Math.round(2 + (217 - 2) * t);
+    g = Math.round(132 + (119 - 132) * t);
+    b = Math.round(199 + (6 - 199) * t);
+  } else if (ratio <= 0.75) {
+    const t = (ratio - 0.5) / 0.25;
+    r = Math.round(217 + (234 - 217) * t);
+    g = Math.round(119 + (88 - 119) * t);
+    b = Math.round(6 + (12 - 6) * t);
+  } else {
+    const t = (ratio - 0.75) / 0.25;
+    r = Math.round(234 + (185 - 234) * t);
+    g = Math.round(88 + (28 - 88) * t);
+    b = Math.round(12 + (28 - 12) * t);
+  }
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function getDisposalHeatmapBg(qty, minQty, maxQty) {
+  const min = Number(minQty) || 0;
+  const max = Number(maxQty) || 1;
+  const val = Number(qty) || 0;
+  if (max <= min) return 'rgba(37, 99, 235, 0.08)';
+  const ratio = Math.max(0, Math.min(1, (val - min) / (max - min)));
+
+  let r, g, b;
+  if (ratio <= 0.25) {
+    const t = ratio / 0.25;
+    r = Math.round(37 + (2 - 37) * t);
+    g = Math.round(99 + (132 - 99) * t);
+    b = Math.round(235 + (199 - 235) * t);
+  } else if (ratio <= 0.5) {
+    const t = (ratio - 0.25) / 0.25;
+    r = Math.round(2 + (217 - 2) * t);
+    g = Math.round(132 + (119 - 132) * t);
+    b = Math.round(199 + (6 - 199) * t);
+  } else if (ratio <= 0.75) {
+    const t = (ratio - 0.5) / 0.25;
+    r = Math.round(217 + (234 - 217) * t);
+    g = Math.round(119 + (88 - 119) * t);
+    b = Math.round(6 + (12 - 6) * t);
+  } else {
+    const t = (ratio - 0.75) / 0.25;
+    r = Math.round(234 + (185 - 234) * t);
+    g = Math.round(88 + (28 - 88) * t);
+    b = Math.round(12 + (28 - 12) * t);
+  }
+  return `rgba(${r}, ${g}, ${b}, 0.08)`;
+}
+
 export default function InsightsView({ metrics, dateMode, complaints = [], searchQuery = '', timeFilter = 'All time', dateFilter = '' }) {
   const [controlChartPeriod, setControlChartPeriod] = useState('day');
   const [gaugeScope, setGaugeScope] = useState('customer'); // 'customer' | 'all'
@@ -102,6 +170,11 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   const [bubbleCustomerScope, setBubbleCustomerScope] = useState('all'); // 'all' | 'commercial' | 'warehouse'
   const [bubbleSelectedProduct, setBubbleSelectedProduct] = useState(null);
   const [hoveredBubble, setHoveredBubble] = useState(null);
+
+  // Disposal summary heatmap state: Scope filter, cluster view, and hover tooltip
+  const [disposalScope, setDisposalScope] = useState('all'); // 'all' | 'closed' | 'pending'
+  const [disposalClusterView, setDisposalClusterView] = useState('all'); // 'all' | 'physical' | 'virtual'
+  const [hoveredHeatmapTile, setHoveredHeatmapTile] = useState(null);
   // Compute filtered complaints based on search, time, and date filters
   const filteredComplaints = useMemo(() => {
     let data = complaints;
@@ -603,6 +676,153 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
   }, [filteredComplaints]);
 
   // ---------------------------------------------------------------------------
+  // Disposal & Write-Off Summary Heatmap Data
+  // Grouped by Write-Off Code, clustered into Physical and Virtual Write-Off
+  // Dynamic color scale: Blue (low qty) to Crimson Red (high qty)
+  // ---------------------------------------------------------------------------
+  const disposalHeatmapData = useMemo(() => {
+    const groups = {};
+    const allItemQuantities = [];
+    let totalPhysicalQty = 0;
+    let totalVirtualQty = 0;
+    let totalOverallQty = 0;
+    let totalComplaintsCount = 0;
+
+    filteredComplaints.forEach((c) => {
+      const sr = c.stock_return || {};
+      const disp = c.disposal || {};
+
+      const confirmedWo = parseFloat(sr.confirmed_write_off_quantity || 0);
+      let physWo = parseFloat(sr.physical_write_off_quantity || 0);
+      let virtWo = parseFloat(sr.virtual_returned_quantity || sr.virtual_write_off_quantity || 0);
+      const dispQty = parseFloat(disp.disposed_quantity || 0);
+
+      // If no write-off quantities recorded, skip
+      if (confirmedWo <= 0 && physWo <= 0 && virtWo <= 0 && dispQty <= 0) {
+        return;
+      }
+
+      // Default distribution if not explicitly separated
+      if (physWo === 0 && virtWo === 0) {
+        if (confirmedWo > 0) physWo = confirmedWo;
+        else if (dispQty > 0) physWo = dispQty;
+      }
+
+      // Filter by disposal scope if selected
+      const isClosed = disp.status === 'Closed' || c.status === 'Closed';
+      if (disposalScope === 'closed' && !isClosed) return;
+      if (disposalScope === 'pending' && isClosed) return;
+
+      // Determine batch write-off code
+      let batchCode = sr.write_off_batch;
+      if (!batchCode || !batchCode.trim()) {
+        const mfg = (c.manufacturing_code || '').trim();
+        const batch = (c.production_batch || '').trim();
+        if (mfg && batch) {
+          batchCode = `${mfg}-${batch}`;
+        } else if (mfg) {
+          batchCode = mfg;
+        } else if (disp.write_off_batch_codes) {
+          batchCode = disp.write_off_batch_codes;
+        } else {
+          batchCode = 'WO-GENERAL';
+        }
+      }
+      batchCode = batchCode.trim();
+
+      const prodId = c.product_id || c.product_short_code || '1-PROD-UNASSIGNED';
+      const prodName = c.product_name || 'Unspecified Product';
+      const uom = c.uom || 'units';
+
+      if (!groups[batchCode]) {
+        groups[batchCode] = {
+          code: batchCode,
+          physical: {},
+          virtual: {},
+          totalQty: 0,
+          totalPhysicalQty: 0,
+          totalVirtualQty: 0,
+          complaints: [],
+          taxCountStatus: disp.tax_count_status || 'Under Tax Review',
+          disposalMethod: disp.disposal_method || 'Physical Destruction / Dump',
+          financeManager: disp.finance_manager_name || 'Bong Tolo',
+          taxOfficer: disp.tax_officer_name || 'Kakada',
+          status: disp.status || c.status || 'Active',
+        };
+      }
+
+      if (!groups[batchCode].complaints.includes(c.id)) {
+        groups[batchCode].complaints.push(c.id);
+        totalComplaintsCount += 1;
+      }
+
+      // Add to physical cluster
+      if (physWo > 0) {
+        if (!groups[batchCode].physical[prodId]) {
+          groups[batchCode].physical[prodId] = {
+            productId: prodId,
+            productName: prodName,
+            qty: 0,
+            uom,
+            complaints: [],
+            location: sr.bin_location || 'Warehouse Cold Room',
+          };
+        }
+        groups[batchCode].physical[prodId].qty += physWo;
+        if (!groups[batchCode].physical[prodId].complaints.includes(c.id)) {
+          groups[batchCode].physical[prodId].complaints.push(c.id);
+        }
+        groups[batchCode].totalPhysicalQty += physWo;
+        groups[batchCode].totalQty += physWo;
+        totalPhysicalQty += physWo;
+        totalOverallQty += physWo;
+      }
+
+      // Add to virtual cluster
+      if (virtWo > 0) {
+        if (!groups[batchCode].virtual[prodId]) {
+          groups[batchCode].virtual[prodId] = {
+            productId: prodId,
+            productName: prodName,
+            qty: 0,
+            uom,
+            complaints: [],
+            location: sr.virtual_location || 'Customer On-Site',
+          };
+        }
+        groups[batchCode].virtual[prodId].qty += virtWo;
+        if (!groups[batchCode].virtual[prodId].complaints.includes(c.id)) {
+          groups[batchCode].virtual[prodId].complaints.push(c.id);
+        }
+        groups[batchCode].totalVirtualQty += virtWo;
+        groups[batchCode].totalQty += virtWo;
+        totalVirtualQty += virtWo;
+        totalOverallQty += virtWo;
+      }
+    });
+
+    const groupList = Object.values(groups).sort((a, b) => b.totalQty - a.totalQty);
+    groupList.forEach((g) => {
+      Object.values(g.physical).forEach((p) => allItemQuantities.push(p.qty));
+      Object.values(g.virtual).forEach((v) => allItemQuantities.push(v.qty));
+    });
+
+    const minQty = allItemQuantities.length > 0 ? Math.min(...allItemQuantities) : 0;
+    const maxQty = allItemQuantities.length > 0 ? Math.max(...allItemQuantities) : 0;
+
+    return {
+      groups: groupList,
+      totalBatches: groupList.length,
+      totalPhysicalQty,
+      totalVirtualQty,
+      totalOverallQty,
+      totalComplaintsCount,
+      minQty,
+      maxQty,
+    };
+  }, [filteredComplaints, disposalScope]);
+
+  // ---------------------------------------------------------------------------
   // 1. Print Executive Insights Report (PDF / Printable View with ALL Charts)
   // ---------------------------------------------------------------------------
   const handlePrintInsightsReport = () => {
@@ -953,6 +1173,102 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
           ${circles}
         </svg>
       `;
+    };
+
+    // 7. Disposal Summary Heatmap HTML Generator for Executive Print / PDF Report
+    const generateDisposalHeatmapPrintHtml = () => {
+      if (!disposalHeatmapData.groups || disposalHeatmapData.groups.length === 0) {
+        return '<div style="padding:16px;text-align:center;color:#64748b;font-size:10px;">No disposal records recorded in current period.</div>';
+      }
+
+      return disposalHeatmapData.groups.map((group) => {
+        const physList = Object.values(group.physical);
+        const virtList = Object.values(group.virtual);
+
+        const physCards = physList.map((item) => {
+          const color = getDisposalHeatmapColor(item.qty, disposalHeatmapData.minQty, disposalHeatmapData.maxQty);
+          const bg = getDisposalHeatmapBg(item.qty, disposalHeatmapData.minQty, disposalHeatmapData.maxQty);
+          return `
+            <div style="border:1.5px solid ${color};background:${bg};border-radius:6px;padding:7px 9px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+                  <span style="font-family:monospace;font-size:8.5px;font-weight:700;background:#ffffff;border:1px solid #cbd5e1;padding:1px 5px;border-radius:3px;color:#0f172a;">${esc(item.productId)}</span>
+                  <span style="font-size:8px;color:#64748b;font-weight:600;">📍 ${esc(item.location)}</span>
+                </div>
+                <div style="font-size:9.5px;font-weight:700;color:#0f172a;">${esc(item.productName)}</div>
+                <div style="font-size:8px;color:#64748b;margin-top:2px;">Claims: ${item.complaints.map(id => esc(id)).join(', ')}</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;margin-left:12px;">
+                <span style="display:inline-block;padding:3px 8px;border-radius:5px;background:${color};color:#ffffff;font-size:11px;font-weight:800;">
+                  ${item.qty} ${esc(item.uom)}
+                </span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        const virtCards = virtList.map((item) => {
+          const color = getDisposalHeatmapColor(item.qty, disposalHeatmapData.minQty, disposalHeatmapData.maxQty);
+          const bg = getDisposalHeatmapBg(item.qty, disposalHeatmapData.minQty, disposalHeatmapData.maxQty);
+          return `
+            <div style="border:1.5px solid ${color};background:${bg};border-radius:6px;padding:7px 9px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+                  <span style="font-family:monospace;font-size:8.5px;font-weight:700;background:#ffffff;border:1px solid #cbd5e1;padding:1px 5px;border-radius:3px;color:#0f172a;">${esc(item.productId)}</span>
+                  <span style="font-size:8px;color:#64748b;font-weight:600;">🌐 ${esc(item.location)}</span>
+                </div>
+                <div style="font-size:9.5px;font-weight:700;color:#0f172a;">${esc(item.productName)}</div>
+                <div style="font-size:8px;color:#64748b;margin-top:2px;">Claims: ${item.complaints.map(id => esc(id)).join(', ')}</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;margin-left:12px;">
+                <span style="display:inline-block;padding:3px 8px;border-radius:5px;background:${color};color:#ffffff;font-size:11px;font-weight:800;">
+                  ${item.qty} ${esc(item.uom)}
+                </span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:9px;margin-bottom:10px;background:#ffffff;">
+            <!-- Group Header -->
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e2e8f0;padding-bottom:6px;margin-bottom:8px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-family:monospace;font-size:10px;font-weight:800;background:#0f172a;color:#ffffff;padding:2px 7px;border-radius:4px;">
+                  Write-Off Code: ${esc(group.code)}
+                </span>
+                <span style="font-size:8.5px;color:#64748b;">Tax Status: <strong>${esc(group.taxCountStatus)}</strong></span>
+              </div>
+              <div>
+                <span style="font-size:10px;font-weight:800;color:#0f172a;">
+                  Batch Write-Off Total: <strong style="color:#b91c1c;">${group.totalQty} units</strong>
+                </span>
+              </div>
+            </div>
+
+            <!-- Two Clusters Grid -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <!-- Physical Cluster -->
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding-bottom:4px;border-bottom:1px dashed #cbd5e1;">
+                  <span style="font-size:9px;font-weight:700;color:#0f766e;">🏢 Physical Write-Off (Warehouse Destruction)</span>
+                  <span style="font-size:8.5px;font-weight:700;color:#0f766e;">${group.totalPhysicalQty} units</span>
+                </div>
+                ${physCards.length > 0 ? physCards : '<div style="font-size:8px;color:#94a3b8;font-style:italic;">No physical write-off items</div>'}
+              </div>
+
+              <!-- Virtual Cluster -->
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding-bottom:4px;border-bottom:1px dashed #cbd5e1;">
+                  <span style="font-size:9px;font-weight:700;color:#2563eb;">🌐 Virtual Write-Off (Customer On-Site)</span>
+                  <span style="font-size:8.5px;font-weight:700;color:#2563eb;">${group.totalVirtualQty} units</span>
+                </div>
+                ${virtCards.length > 0 ? virtCards : '<div style="font-size:8px;color:#94a3b8;font-style:italic;">No virtual write-off items</div>'}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
     };
 
     // Table rows data
@@ -1585,10 +1901,34 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
     </div>
   </div>
 
-  <!-- Section 7: Corrective & Preventative Actions (CAPA) -->
+  <!-- Section 7: Disposal & Write-Off Summary Heatmap -->
+  <div class="section-card">
+    <div class="section-title">
+      <span>7. Disposal & Write-Off Summary Heatmap (Physical & Virtual Clusters)</span>
+      <span style="font-size:9.5px;color:#64748b;font-weight:600;">Tax-Audited Destructions (${disposalHeatmapData.totalOverallQty} Units Total)</span>
+    </div>
+
+    <!-- Heatmap Scale Legend -->
+    <div style="display:flex;align-items:center;gap:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px 12px;margin-bottom:12px;">
+      <span style="font-size:9px;font-weight:700;color:#334155;">Heatmap Quantity Scale:</span>
+      <div style="display:flex;align-items:center;gap:8px;flex:1;">
+        <span style="font-size:8.5px;font-weight:700;color:#1d4ed8;">Low QTY (${disposalHeatmapData.minQty} units)</span>
+        <div style="flex:1;height:8px;border-radius:4px;background:linear-gradient(to right, #1d4ed8, #0284c7, #d97706, #ea580c, #b91c1c);"></div>
+        <span style="font-size:8.5px;font-weight:700;color:#b91c1c;">High QTY (${disposalHeatmapData.maxQty} units)</span>
+      </div>
+    </div>
+
+    ${generateDisposalHeatmapPrintHtml()}
+
+    <div class="explanation-box">
+      <strong>Management Explanation:</strong> Write-off stock is categorized into <em>Physical Write-Off</em> (stock returned to central facility and destroyed in the presence of Tax Officer Kakada and Finance Manager Bong Tolo) and <em>Virtual Write-Off</em> (stock destroyed on-site at provincial customer branches under supervisor oversight with video verification). All write-offs are assigned an official Write-Off Code for General Department of Taxation (GDT) deductible expense reconciliation.
+    </div>
+  </div>
+
+  <!-- Section 8: Corrective & Preventative Actions (CAPA) -->
   <div class="section-card" style="background:#fefce8;border-color:#fde047;">
     <div class="section-title" style="color:#854d0e;border-color:#fef08a;">
-      <span>7. Strategic Quality Action Plan (CAPA)</span>
+      <span>8. Strategic Quality Action Plan (CAPA)</span>
       <span style="font-size:9.5px;color:#854d0e;font-weight:700;">Mandatory Quality Directives</span>
     </div>
     <div style="font-size:10.5px;color:#713f12;line-height:1.55;">
@@ -3300,6 +3640,533 @@ export default function InsightsView({ metrics, dateMode, complaints = [], searc
         })() : (
           <div style={{ padding: '24px 0', textAlign: 'center', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
             No complaints found for the selected bubble chart scope.
+          </div>
+        )}
+      </div>
+
+      {/* =========================================================================
+          Card 9: Disposal Summary Heatmap
+          Grouping by Write-Off Code & Clustered into Physical and Virtual Write-Off
+          Heatmap dynamic colors: Blue (small write-off) to Red (highest write-off)
+          Detail of Product ID and Qty
+         ========================================================================= */}
+      <div className="insight-card" style={{ marginTop: 20 }}>
+        {/* Card Header & Controls */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Layers size={20} style={{ color: 'var(--color-brand)' }} />
+              <h3 className="insight-card-title">Disposal Summary Heatmap (Physical & Virtual Clusters)</h3>
+              <span
+                style={{
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  color: '#b91c1c',
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  padding: '2px 8px',
+                  borderRadius: '9999px',
+                  letterSpacing: '0.02em',
+                }}
+              >
+                STAGE 05 & 06 DISPOSAL
+              </span>
+            </div>
+            <div className="insight-card-subtitle" style={{ marginTop: 4 }}>
+              Grouping write-offs by <strong>Write-Off Code</strong>, clustered into <strong>Physical Write-Off</strong> (warehouse destruction) and <strong>Virtual Write-Off</strong> (customer on-site), with <strong>Product ID</strong> and defect quantity details.
+            </div>
+          </div>
+
+          {/* Scope & Cluster View Pills */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 600 }}>Filter:</span>
+              <div className="time-pills">
+                <button
+                  type="button"
+                  className={`pill-btn ${disposalScope === 'all' ? 'active' : ''}`}
+                  onClick={() => setDisposalScope('all')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  All Write-Offs
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${disposalScope === 'closed' ? 'active' : ''}`}
+                  onClick={() => setDisposalScope('closed')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  Closed & Disposed
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${disposalScope === 'pending' ? 'active' : ''}`}
+                  onClick={() => setDisposalScope('pending')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  Active / In-Review
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 600 }}>Cluster:</span>
+              <div className="time-pills">
+                <button
+                  type="button"
+                  className={`pill-btn ${disposalClusterView === 'all' ? 'active' : ''}`}
+                  onClick={() => setDisposalClusterView('all')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  Both Clusters
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${disposalClusterView === 'physical' ? 'active' : ''}`}
+                  onClick={() => setDisposalClusterView('physical')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  🏢 Physical Only
+                </button>
+                <button
+                  type="button"
+                  className={`pill-btn ${disposalClusterView === 'virtual' ? 'active' : ''}`}
+                  onClick={() => setDisposalClusterView('virtual')}
+                  style={{ fontSize: '0.72rem', padding: '3px 10px' }}
+                >
+                  🌐 Virtual Only
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Executive KPI Summary Row */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 12,
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Write-Off Batches</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#0f172a', marginTop: 2 }}>
+              {disposalHeatmapData.totalBatches} <span style={{ fontSize: '0.75rem', fontWeight: 500, color: '#64748b' }}>code groups</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: 2 }}>Across {disposalHeatmapData.totalComplaintsCount} complaints</div>
+          </div>
+
+          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#991b1b', fontWeight: 700, textTransform: 'uppercase' }}>Total Write-Off Volume</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#b91c1c', marginTop: 2 }}>
+              {disposalHeatmapData.totalOverallQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#991b1b', marginTop: 2 }}>Max cell: {disposalHeatmapData.maxQty} units</div>
+          </div>
+
+          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#166534', fontWeight: 700, textTransform: 'uppercase' }}>🏢 Physical Destruction</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#15803d', marginTop: 2 }}>
+              {disposalHeatmapData.totalPhysicalQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#166534', marginTop: 2 }}>Warehouse quarantined & dumped</div>
+          </div>
+
+          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '10px 14px' }}>
+            <div style={{ fontSize: '0.74rem', color: '#1e40af', fontWeight: 700, textTransform: 'uppercase' }}>🌐 Virtual Destruction</div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#2563eb', marginTop: 2 }}>
+              {disposalHeatmapData.totalVirtualQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: '#1e40af', marginTop: 2 }}>Customer on-site destruction</div>
+          </div>
+        </div>
+
+        {/* Dynamic Heatmap Legend */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 16,
+            background: 'var(--color-bg-subtle, #f8fafc)',
+            border: '1px solid #e2e8f0',
+            borderRadius: 8,
+            padding: '8px 16px',
+            marginBottom: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Flame size={16} style={{ color: '#ea580c' }} />
+            <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#334155' }}>Write-Off Intensity Scale:</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 260, maxWidth: 540 }}>
+            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#1d4ed8', whiteSpace: 'nowrap' }}>
+              Small QTY ({disposalHeatmapData.minQty} units)
+            </span>
+            <div
+              style={{
+                flex: 1,
+                height: 10,
+                borderRadius: 5,
+                background: 'linear-gradient(to right, #1d4ed8, #0284c7, #d97706, #ea580c, #b91c1c)',
+                boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.15)',
+              }}
+            />
+            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#b91c1c', whiteSpace: 'nowrap' }}>
+              Highest QTY ({disposalHeatmapData.maxQty} units)
+            </span>
+          </div>
+          <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+            <span>Dynamic gradient based on audited quantity</span>
+          </div>
+        </div>
+
+        {/* Heatmap Groups Hierarchy */}
+        {disposalHeatmapData.groups.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {disposalHeatmapData.groups.map((group) => {
+              const physItems = Object.values(group.physical);
+              const virtItems = Object.values(group.virtual);
+              const showPhysical = disposalClusterView === 'all' || disposalClusterView === 'physical';
+              const showVirtual = disposalClusterView === 'all' || disposalClusterView === 'virtual';
+
+              return (
+                <div
+                  key={`wo-group-${group.code}`}
+                  style={{
+                    border: '1px solid #cbd5e1',
+                    borderRadius: 10,
+                    background: 'var(--color-bg-card, #ffffff)',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Write-off Code Header */}
+                  <div
+                    style={{
+                      background: '#0f172a',
+                      color: '#ffffff',
+                      padding: '10px 16px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span
+                        style={{
+                          fontFamily: 'monospace',
+                          fontSize: '0.86rem',
+                          fontWeight: 800,
+                          background: 'rgba(255,255,255,0.16)',
+                          padding: '3px 10px',
+                          borderRadius: 6,
+                          letterSpacing: '0.04em',
+                          border: '1px solid rgba(255,255,255,0.25)',
+                        }}
+                      >
+                        Write-Off Code: {group.code}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '0.72rem',
+                          padding: '2px 8px',
+                          borderRadius: 9999,
+                          background: group.status === 'Closed' ? '#10b981' : '#f59e0b',
+                          color: '#ffffff',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {group.status === 'Closed' ? 'Closed & Tax Verified' : 'In Review'}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <div style={{ fontSize: '0.76rem', color: '#94a3b8' }}>
+                        Tax Officer: <strong style={{ color: '#ffffff' }}>{group.taxOfficer}</strong> • Finance: <strong style={{ color: '#ffffff' }}>{group.financeManager}</strong>
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '0.85rem',
+                          fontWeight: 800,
+                          background: '#dc2626',
+                          color: '#ffffff',
+                          padding: '3px 10px',
+                          borderRadius: 6,
+                        }}
+                      >
+                        Batch Total: {group.totalQty} units
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Components Clusters Container */}
+                  <div
+                    style={{
+                      padding: 14,
+                      display: 'grid',
+                      gridTemplateColumns: showPhysical && showVirtual ? 'repeat(auto-fit, minmax(360px, 1fr))' : '1fr',
+                      gap: 14,
+                    }}
+                  >
+                    {/* Component 1: Physical Write-Off */}
+                    {showPhysical && (
+                      <div
+                        style={{
+                          border: '1px solid #bbf7d0',
+                          borderRadius: 8,
+                          background: '#fcfdfd',
+                          padding: 12,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            borderBottom: '1px solid #dcfce7',
+                            paddingBottom: 8,
+                            marginBottom: 10,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Building size={16} style={{ color: '#15803d' }} />
+                            <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#14532d' }}>
+                              🏢 Physical Write-Off (Warehouse)
+                            </span>
+                          </div>
+                          <span
+                            style={{
+                              fontSize: '0.74rem',
+                              fontWeight: 800,
+                              color: '#15803d',
+                              background: '#dcfce7',
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                            }}
+                          >
+                            Subtotal: {group.totalPhysicalQty} units
+                          </span>
+                        </div>
+
+                        {physItems.length > 0 ? (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
+                            {physItems.map((item) => {
+                              const heatColor = getDisposalHeatmapColor(item.qty, disposalHeatmapData.minQty, disposalHeatmapData.maxQty);
+                              const heatBg = getDisposalHeatmapBg(item.qty, disposalHeatmapData.minQty, disposalHeatmapData.maxQty);
+                              const isHovered = hoveredHeatmapTile && hoveredHeatmapTile.productId === item.productId && hoveredHeatmapTile.group === group.code && hoveredHeatmapTile.type === 'Physical';
+
+                              return (
+                                <div
+                                  key={`phys-${group.code}-${item.productId}`}
+                                  style={{
+                                    border: `1.5px solid ${heatColor}`,
+                                    background: heatBg,
+                                    borderRadius: 8,
+                                    padding: '10px 12px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    justifyContent: 'space-between',
+                                    gap: 8,
+                                    boxShadow: isHovered ? '0 4px 12px rgba(0,0,0,0.12)' : '0 1px 2px rgba(0,0,0,0.04)',
+                                    transform: isHovered ? 'translateY(-2px)' : 'none',
+                                    transition: 'all 0.15s ease',
+                                    position: 'relative',
+                                  }}
+                                  onMouseEnter={() => setHoveredHeatmapTile({ ...item, group: group.code, type: 'Physical' })}
+                                  onMouseLeave={() => setHoveredHeatmapTile(null)}
+                                >
+                                  <div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                      <span
+                                        style={{
+                                          fontFamily: 'monospace',
+                                          fontSize: '0.74rem',
+                                          fontWeight: 800,
+                                          background: '#ffffff',
+                                          color: '#0f172a',
+                                          padding: '2px 6px',
+                                          borderRadius: 4,
+                                          border: '1px solid #cbd5e1',
+                                        }}
+                                      >
+                                        {item.productId}
+                                      </span>
+                                      <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600 }}>
+                                        📍 {item.location}
+                                      </span>
+                                    </div>
+                                    <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0f172a', lineHeight: 1.3 }}>
+                                      {item.productName}
+                                    </div>
+                                  </div>
+
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', paddingTop: 6, borderTop: '1px dashed rgba(0,0,0,0.08)' }}>
+                                    <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
+                                      <span>Claims: {item.complaints.join(', ')}</span>
+                                    </div>
+                                    <div
+                                      style={{
+                                        background: heatColor,
+                                        color: '#ffffff',
+                                        padding: '4px 10px',
+                                        borderRadius: 6,
+                                        fontWeight: 900,
+                                        fontSize: '0.98rem',
+                                        boxShadow: '0 2px 4px rgba(0,0,0,0.12)',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      {item.qty} <span style={{ fontSize: '0.72rem', fontWeight: 600 }}>{item.uom}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.76rem', color: '#94a3b8', fontStyle: 'italic', padding: '12px 0', textAlign: 'center' }}>
+                            No physical write-off items in this batch.
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Component 2: Virtual Write-Off */}
+                    {showVirtual && (
+                      <div
+                        style={{
+                          border: '1px solid #bfdbfe',
+                          borderRadius: 8,
+                          background: '#fcfdfd',
+                          padding: 12,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            borderBottom: '1px solid #dbeafe',
+                            paddingBottom: 8,
+                            marginBottom: 10,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Globe size={16} style={{ color: '#2563eb' }} />
+                            <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#1e40af' }}>
+                              🌐 Virtual Write-Off (Customer On-Site)
+                            </span>
+                          </div>
+                          <span
+                            style={{
+                              fontSize: '0.74rem',
+                              fontWeight: 800,
+                              color: '#2563eb',
+                              background: '#dbeafe',
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                            }}
+                          >
+                            Subtotal: {group.totalVirtualQty} units
+                          </span>
+                        </div>
+
+                        {virtItems.length > 0 ? (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
+                            {virtItems.map((item) => {
+                              const heatColor = getDisposalHeatmapColor(item.qty, disposalHeatmapData.minQty, disposalHeatmapData.maxQty);
+                              const heatBg = getDisposalHeatmapBg(item.qty, disposalHeatmapData.minQty, disposalHeatmapData.maxQty);
+                              const isHovered = hoveredHeatmapTile && hoveredHeatmapTile.productId === item.productId && hoveredHeatmapTile.group === group.code && hoveredHeatmapTile.type === 'Virtual';
+
+                              return (
+                                <div
+                                  key={`virt-${group.code}-${item.productId}`}
+                                  style={{
+                                    border: `1.5px solid ${heatColor}`,
+                                    background: heatBg,
+                                    borderRadius: 8,
+                                    padding: '10px 12px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    justifyContent: 'space-between',
+                                    gap: 8,
+                                    boxShadow: isHovered ? '0 4px 12px rgba(0,0,0,0.12)' : '0 1px 2px rgba(0,0,0,0.04)',
+                                    transform: isHovered ? 'translateY(-2px)' : 'none',
+                                    transition: 'all 0.15s ease',
+                                    position: 'relative',
+                                  }}
+                                  onMouseEnter={() => setHoveredHeatmapTile({ ...item, group: group.code, type: 'Virtual' })}
+                                  onMouseLeave={() => setHoveredHeatmapTile(null)}
+                                >
+                                  <div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                      <span
+                                        style={{
+                                          fontFamily: 'monospace',
+                                          fontSize: '0.74rem',
+                                          fontWeight: 800,
+                                          background: '#ffffff',
+                                          color: '#0f172a',
+                                          padding: '2px 6px',
+                                          borderRadius: 4,
+                                          border: '1px solid #cbd5e1',
+                                        }}
+                                      >
+                                        {item.productId}
+                                      </span>
+                                      <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600 }}>
+                                        🌐 {item.location}
+                                      </span>
+                                    </div>
+                                    <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0f172a', lineHeight: 1.3 }}>
+                                      {item.productName}
+                                    </div>
+                                  </div>
+
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', paddingTop: 6, borderTop: '1px dashed rgba(0,0,0,0.08)' }}>
+                                    <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
+                                      <span>Claims: {item.complaints.join(', ')}</span>
+                                    </div>
+                                    <div
+                                      style={{
+                                        background: heatColor,
+                                        color: '#ffffff',
+                                        padding: '4px 10px',
+                                        borderRadius: 6,
+                                        fontWeight: 900,
+                                        fontSize: '0.98rem',
+                                        boxShadow: '0 2px 4px rgba(0,0,0,0.12)',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      {item.qty} <span style={{ fontSize: '0.72rem', fontWeight: 600 }}>{item.uom}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.76rem', color: '#94a3b8', fontStyle: 'italic', padding: '12px 0', textAlign: 'center' }}>
+                            No virtual write-off items in this batch.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ padding: '28px 0', textAlign: 'center', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
+            No disposal or write-off records matching the selected scope.
           </div>
         )}
       </div>
