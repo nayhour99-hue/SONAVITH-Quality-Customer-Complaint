@@ -615,14 +615,9 @@ export default function BatchDisposalModal({
               flexShrink: 0,
             }}
           >
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-              }}
-            >
+            <div className="batch-disposal-form-grid">
               {/* Row 1 Left: Disposal letter issue Date */}
-              <div style={{ display: 'grid', gridTemplateColumns: '185px 1fr', alignItems: 'center', padding: '9px 14px', borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }}>
+              <div className="batch-disposal-field-row" style={{ borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1e293b' }}>
                   Disposal letter issue Date:
                 </label>
@@ -638,7 +633,7 @@ export default function BatchDisposalModal({
               </div>
 
               {/* Row 1 Right: Finance Manager Name */}
-              <div style={{ display: 'grid', gridTemplateColumns: '175px 1fr', alignItems: 'center', padding: '9px 14px', borderBottom: '1px solid #e2e8f0' }}>
+              <div className="batch-disposal-field-row" style={{ borderBottom: '1px solid #e2e8f0' }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1e293b' }}>
                   Finance Manager Name:
                 </label>
@@ -655,7 +650,7 @@ export default function BatchDisposalModal({
               </div>
 
               {/* Row 2 Left: Disposal date */}
-              <div style={{ display: 'grid', gridTemplateColumns: '185px 1fr', alignItems: 'center', padding: '9px 14px', borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }}>
+              <div className="batch-disposal-field-row" style={{ borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1e293b' }}>
                   Disposal date:
                 </label>
@@ -671,7 +666,7 @@ export default function BatchDisposalModal({
               </div>
 
               {/* Row 2 Right: Tax Officer */}
-              <div style={{ display: 'grid', gridTemplateColumns: '175px 1fr', alignItems: 'center', padding: '9px 14px', borderBottom: '1px solid #e2e8f0' }}>
+              <div className="batch-disposal-field-row" style={{ borderBottom: '1px solid #e2e8f0' }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1e293b' }}>
                   Tax Officer:
                 </label>
@@ -687,7 +682,7 @@ export default function BatchDisposalModal({
               </div>
 
               {/* Row 3 Left: Tax Count Status */}
-              <div style={{ display: 'grid', gridTemplateColumns: '185px 1fr', alignItems: 'center', padding: '9px 14px', borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }}>
+              <div className="batch-disposal-field-row" style={{ borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1e293b' }}>
                   Tax Count Status:
                 </label>
@@ -705,7 +700,7 @@ export default function BatchDisposalModal({
               </div>
 
               {/* Row 3 Right: Disposal Method */}
-              <div style={{ display: 'grid', gridTemplateColumns: '175px 1fr', alignItems: 'center', padding: '9px 14px', borderBottom: '1px solid #e2e8f0' }}>
+              <div className="batch-disposal-field-row" style={{ borderBottom: '1px solid #e2e8f0' }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1e293b' }}>
                   Disposal Method:
                 </label>
@@ -724,7 +719,7 @@ export default function BatchDisposalModal({
               </div>
 
               {/* Row 4 Left: Write off batch code */}
-              <div style={{ display: 'grid', gridTemplateColumns: '185px 1fr', alignItems: 'center', padding: '10px 14px', borderRight: '1px solid #e2e8f0', background: '#fef2f2', borderBottomLeftRadius: 10 }}>
+              <div className="batch-disposal-field-row" style={{ borderRight: '1px solid #e2e8f0', background: '#fef2f2', borderBottomLeftRadius: 10 }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#991b1b' }}>
                   Write off batch code:
                 </label>
@@ -745,7 +740,7 @@ export default function BatchDisposalModal({
               </div>
 
               {/* Row 4 Right: Status: Closed/Open (Action by Finance manager) */}
-              <div style={{ display: 'grid', gridTemplateColumns: '175px 1fr', alignItems: 'center', padding: '10px 14px', background: '#fefce8', borderBottomRightRadius: 10 }}>
+              <div className="batch-disposal-field-row" style={{ background: '#fefce8', borderBottomRightRadius: 10 }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#854d0e' }}>
                   Status:
                 </label>

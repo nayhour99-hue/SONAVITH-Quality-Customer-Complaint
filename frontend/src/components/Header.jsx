@@ -51,17 +51,7 @@ export default function Header({
     <header className="brand-header-card">
       <div className="brand-header-body">
         {/* Top-right Action Bar: Admin tools & Logout (properly aligned without overlapping) */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 16,
-            right: 18,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            zIndex: 10,
-          }}
-        >
+        <div className="header-action-bar">
           {/* Reset Demo button: ONLY visible to Admin users to protect live data */}
           {userRole === 'Admin' && (
             <button

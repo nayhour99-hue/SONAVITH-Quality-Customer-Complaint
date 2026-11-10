@@ -111,6 +111,16 @@ a:hover {
   position: relative;
 }
 
+.header-action-bar {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 10;
+}
+
 .brand-top-row {
   display: flex;
   align-items: center;
@@ -168,6 +178,15 @@ a:hover {
   border-radius: var(--radius-full);
   border: 1px solid var(--color-border);
   gap: 2px;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.tab-switcher::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-btn {
@@ -177,6 +196,8 @@ a:hover {
   border-radius: var(--radius-full);
   color: var(--color-text-muted);
   transition: all 0.2s;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .tab-btn:hover {
@@ -814,6 +835,7 @@ a:hover {
   border-radius: 0 0 var(--radius-md) var(--radius-md);
   box-shadow: var(--shadow-sm);
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   margin-bottom: 24px;
 }
 
@@ -1223,23 +1245,240 @@ a:hover {
   to { transform: translateY(0); opacity: 1; }
 }
 
+/* Batch Disposal Form Grid */
+.batch-disposal-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.batch-disposal-field-row {
+  display: grid;
+  grid-template-columns: 185px 1fr;
+  align-items: center;
+  padding: 9px 14px;
+  gap: 8px;
+}
+
+/* ==========================================================================
+   Responsive Breakpoints: Desktop (>1024px), Tablet (641px-1024px), Mobile (<=640px)
+   ========================================================================== */
+
 @media (max-width: 1100px) {
   .insights-row-3col {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1024px) {
   .metrics-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
   }
   .insights-grid {
     grid-template-columns: 1fr;
   }
-  .insights-row-3col {
-    grid-template-columns: 1fr;
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    padding: 16px 12px 48px 12px;
   }
+
+  /* Header mobile adjustment: stack action bar above or static */
+  .header-action-bar {
+    position: static;
+    width: 100%;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+
+  .brand-header-body {
+    padding: 18px 14px 16px 14px;
+  }
+
+  .brand-top-row {
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+    text-align: center;
+  }
+
+  .brand-top-row > div[style*="width: 1"] {
+    display: none !important;
+  }
+
+  .brand-title {
+    font-size: 1.25rem;
+    text-align: center;
+  }
+
+  .brand-subtitle {
+    font-size: 0.82rem;
+    margin-bottom: 14px;
+  }
+
+  .tab-switcher {
+    width: 100%;
+    border-radius: 12px;
+    justify-content: flex-start;
+    padding: 4px;
+  }
+
+  .tab-btn {
+    padding: 6px 14px;
+    font-size: 0.82rem;
+  }
+
+  /* Filter toolbar responsive */
+  .filter-bar-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px 14px;
+  }
+
+  .search-input-wrap {
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .filter-actions-right {
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
   .form-grid-2col {
     grid-template-columns: 1fr;
+  }
+
+  .batch-disposal-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .batch-disposal-field-row {
+    grid-template-columns: 1fr;
+    border-right: none !important;
+    gap: 6px;
+    padding: 10px 12px;
+  }
+
+  .modal-overlay {
+    padding: 10px;
+  }
+
+  .modal-dialog {
+    max-height: 94vh;
+    width: 100%;
+  }
+
+  .complaints-table th,
+  .complaints-table td {
+    padding: 10px 8px;
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 540px) {
+  .donut-container {
+    flex-direction: column;
+    gap: 14px;
+    align-items: center;
+  }
+
+  .donut-legend {
+    max-width: 100% !important;
+    align-items: center;
+  }
+
+  .bar-chart-label {
+    width: 105px;
+    font-size: 0.76rem;
+  }
+
+  .modal-header {
+    padding: 12px 14px;
+  }
+
+  .modal-body {
+    padding: 12px 14px;
+  }
+
+  .dept-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-container {
+    padding: 12px 8px 40px 8px;
+  }
+
+  .filter-actions-right {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .time-pills {
+    display: flex;
+    width: 100%;
+  }
+
+  .time-pill-btn {
+    flex: 1;
+    text-align: center;
+  }
+
+  .date-select-wrapper,
+  .date-select-btn,
+  .sort-order-btn,
+  .export-excel-wrapper,
+  .export-excel-split-btn,
+  .btn-export-excel,
+  .btn-primary-action {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .export-excel-split-btn {
+    width: 100%;
+  }
+
+  .btn-export-excel {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .btn-export-dropdown-toggle {
+    padding: 8px 12px;
+  }
+
+  .btn-primary-action {
+    justify-content: center;
+  }
+
+  .metric-card {
+    padding: 12px 14px;
+  }
+
+  .metric-number {
+    font-size: 1.4rem;
+  }
+
+  .brand-title {
+    font-size: 1.15rem;
+  }
+
+  .brand-logo-image {
+    height: 32px;
   }
 }
