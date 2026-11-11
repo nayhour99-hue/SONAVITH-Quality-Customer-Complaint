@@ -113,7 +113,7 @@ class CEODecisionRequest(BaseModel):
 
 class WarehouseFulfillRequest(BaseModel):
     officer_name: str = Field(..., example="Vicheka Kem")
-    replacement_batch: str = Field(..., example="MAC-20260928-BATCH2")
+    replacement_batch: Optional[str] = Field(default="N/A", example="MAC-20260928-BATCH2")
     dispatch_date: str = Field(..., example="2026-09-20")
     dispatched_quantity: Optional[int] = Field(default=None, ge=0, example=7, description="Quantity dispatched by warehouse matching QA confirmed defect quantity")
     delivery_notes: Optional[str] = Field(default="", example="Dispatched confirmed units with morning chilled route")

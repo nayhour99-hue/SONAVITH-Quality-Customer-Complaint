@@ -204,7 +204,10 @@ export default function ComplaintTable({
           stageNotes = `Decision: ${esc(ceo.action || c.status)}${ceo.compensation_type ? ` (${esc(ceo.compensation_type)})` : ''}`;
         } else if (currentTab === 'warehouse') {
           const wh = c.warehouse_fulfillment || {};
-          stageNotes = `Exchanged: ${wh.exchanged_quantity || 0} ${esc(c.unit_of_measure)}${wh.dispatch_status ? ` • ${esc(wh.dispatch_status)}` : ''}`;
+          const dispQty = wh.dispatched_quantity !== undefined && wh.dispatched_quantity !== null
+            ? wh.dispatched_quantity
+            : (wh.exchanged_quantity !== undefined ? wh.exchanged_quantity : 0);
+          stageNotes = `Exchanged: ${dispQty} ${esc(c.unit_of_measure)}${dispQty === 0 ? ' (No exchange)' : ''}${wh.dispatch_status ? ` • ${esc(wh.dispatch_status)}` : ''}`;
         } else if (currentTab === 'stock_return') {
           const sr = c.stock_return || {};
           stageNotes = `Bin: ${esc(sr.bin_location || '—')}${sr.qa_signed_off === 'Yes' ? ' • QA Signed Off' : ' • Pending Sign-Off'}`;

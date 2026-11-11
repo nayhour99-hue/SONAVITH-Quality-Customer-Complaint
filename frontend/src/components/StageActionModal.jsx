@@ -389,7 +389,9 @@ export default function StageActionModal({
     const hasPhysicalField = existingSR.physical_returned_quantity !== undefined && existingSR.physical_returned_quantity !== null;
     const defaultTotal = existingSR.returned_quantity !== undefined && existingSR.returned_quantity !== null
       ? existingSR.returned_quantity
-      : (complaint.warehouse_fulfillment?.dispatched_quantity || complaint.defect_quantity || 1);
+      : (complaint.warehouse_fulfillment?.dispatched_quantity !== undefined && complaint.warehouse_fulfillment?.dispatched_quantity !== null
+          ? complaint.warehouse_fulfillment.dispatched_quantity
+          : (complaint.defect_quantity !== undefined ? complaint.defect_quantity : 1));
     
     const initPhysicalQty = hasPhysicalField
       ? existingSR.physical_returned_quantity
@@ -581,12 +583,16 @@ export default function StageActionModal({
     e.preventDefault();
     setLoading(true);
     try {
+      const finalDispatchedQty = Number(dispatchedQty) >= 0 ? Number(dispatchedQty) : 0;
+      const finalBatch = finalDispatchedQty === 0 && (!replacementBatch || !replacementBatch.trim()) ? 'N/A' : replacementBatch;
+      const finalNotes = deliveryNotes || (finalDispatchedQty === 0 ? 'No exchange dispatched (customer continued selling defective inventory).' : '');
+
       await onSubmitWarehouse(complaint.id, {
         officer_name: officerName,
-        replacement_batch: replacementBatch,
-        dispatched_quantity: Number(dispatchedQty),
+        replacement_batch: finalBatch,
+        dispatched_quantity: finalDispatchedQty,
         dispatch_date: dispatchDate,
-        delivery_notes: deliveryNotes,
+        delivery_notes: finalNotes,
       });
       onClose();
     } finally {
@@ -1029,13 +1035,13 @@ export default function StageActionModal({
   <div class="card" style="background:#f0fdf4;border-color:#bbf7d0;">
     <div class="card-header" style="border-color:#dcfce7;">
       <span class="card-title" style="color:#15803d;">Stage 4: Warehouse Fulfillment Details</span>
-      <span class="tag" style="background:#dcfce7;color:#15803d;">Completed & Dispatched</span>
+      <span class="tag" style="background:${Number(wh.dispatched_quantity) === 0 ? '#fef3c7' : '#dcfce7'};color:${Number(wh.dispatched_quantity) === 0 ? '#b45309' : '#15803d'};">${Number(wh.dispatched_quantity) === 0 ? 'No Exchange (0 Dispatched)' : 'Completed & Dispatched'}</span>
     </div>
     <div class="grid-2">
       <div><strong>Warehouse Officer:</strong> ${esc(wh.officer_name)}</div>
       <div><strong>Dispatch Date:</strong> ${esc(wh.dispatch_date)}</div>
-      <div><strong>Dispatched Quantity:</strong> <strong>${esc(wh.dispatched_quantity)} ${esc(uom)}</strong></div>
-      <div><strong>Replacement Batch Code:</strong> <code>${esc(wh.replacement_batch)}</code></div>
+      <div><strong>Dispatched Quantity:</strong> <strong>${esc(wh.dispatched_quantity)} ${esc(uom)} ${Number(wh.dispatched_quantity) === 0 ? '(No exchange)' : ''}</strong></div>
+      <div><strong>Replacement Batch Code:</strong> <code>${esc(wh.replacement_batch || 'N/A')}</code></div>
       ${wh.delivery_notes ? `<div class="span-2"><strong>Delivery & Route Notes:</strong> ${esc(wh.delivery_notes)}</div>` : ''}
     </div>
   </div>
@@ -1898,25 +1904,34 @@ export default function StageActionModal({
                   <label className="form-label">Exchange Quantity Dispatched ({complaint.unit_of_measure})</label>
                   <input
                     type="number"
-                    min="1"
+                    min="0"
                     className="form-input"
                     value={dispatchedQty}
                     onChange={(e) => setDispatchedQty(e.target.value)}
                     required
                   />
-                  <div style={{ fontSize: '0.72rem', color: '#15803d', fontWeight: 500, marginTop: 3 }}>
-                    Matching QA confirmed: {qaConfirmedQty} {complaint.unit_of_measure}
-                  </div>
+                  {Number(dispatchedQty) === 0 ? (
+                    <div style={{ fontSize: '0.74rem', color: '#b45309', background: '#fefce8', border: '1px solid #fde047', borderRadius: 6, padding: '6px 10px', fontWeight: 500, marginTop: 4 }}>
+                      ⚠️ <strong>No exchange (0 {complaint.unit_of_measure}):</strong> Customer continued selling defective products; no replacement units dispatched.
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.72rem', color: '#15803d', fontWeight: 500, marginTop: 3 }}>
+                      Matching QA confirmed: {qaConfirmedQty} {complaint.unit_of_measure}
+                    </div>
+                  )}
                 </div>
 
                 <div>
-                  <label className="form-label">Replacement Fresh Batch Code</label>
+                  <label className="form-label">
+                    Replacement Fresh Batch Code {Number(dispatchedQty) === 0 && <span style={{ color: '#64748b', fontWeight: 400 }}>(Optional for 0 exchange)</span>}
+                  </label>
                   <input
                     type="text"
                     className="form-input"
                     value={replacementBatch}
+                    placeholder={Number(dispatchedQty) === 0 ? "N/A (No exchange dispatched)" : "e.g. MAC-20260928-BATCH2"}
                     onChange={(e) => setReplacementBatch(e.target.value)}
-                    required
+                    required={Number(dispatchedQty) > 0}
                   />
                 </div>
               </div>
@@ -1938,12 +1953,17 @@ export default function StageActionModal({
                   rows="2"
                   className="form-textarea"
                   value={deliveryNotes}
+                  placeholder={Number(dispatchedQty) === 0 ? "Customer continued selling defective products; 0 replacement units dispatched." : "e.g. Dispatched with morning chilled route."}
                   onChange={(e) => setDeliveryNotes(e.target.value)}
                 ></textarea>
               </div>
 
               <button type="submit" className="btn-submit-modal" disabled={loading}>
-                {loading ? 'Fulfilling Exchange...' : `Confirm Dispatch of ${dispatchedQty} ${complaint.unit_of_measure} & Complete`}
+                {loading
+                  ? 'Fulfilling Exchange...'
+                  : Number(dispatchedQty) === 0
+                  ? `Confirm No Exchange (0 ${complaint.unit_of_measure} Dispatched) & Complete`
+                  : `Confirm Dispatch of ${dispatchedQty} ${complaint.unit_of_measure} & Complete`}
               </button>
             </form>
           )}
@@ -2774,8 +2794,8 @@ export default function StageActionModal({
                       <PackageCheck size={16} color="#15803d" />
                       <strong style={{ color: '#15803d', fontSize: '0.9rem' }}>Stage 4: Warehouse Fulfillment Details</strong>
                     </div>
-                    <span style={{ fontSize: '0.75rem', background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: 12, fontWeight: 700 }}>
-                      Completed & Dispatched
+                    <span style={{ fontSize: '0.75rem', background: Number(complaint.warehouse_fulfillment.dispatched_quantity) === 0 ? '#fef3c7' : '#dcfce7', color: Number(complaint.warehouse_fulfillment.dispatched_quantity) === 0 ? '#b45309' : '#15803d', padding: '2px 8px', borderRadius: 12, fontWeight: 700 }}>
+                      {Number(complaint.warehouse_fulfillment.dispatched_quantity) === 0 ? 'No Exchange (0 Dispatched)' : 'Completed & Dispatched'}
                     </span>
                   </div>
                   <div style={{ fontSize: '0.84rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
@@ -2783,14 +2803,15 @@ export default function StageActionModal({
                     <div><strong>Dispatch Date:</strong> <span style={{ fontWeight: 600 }}>{complaint.warehouse_fulfillment.dispatch_date}</span></div>
                     <div>
                       <strong>Dispatched Quantity:</strong>{' '}
-                      <span style={{ color: '#15803d', fontWeight: 700 }}>
+                      <span style={{ color: Number(complaint.warehouse_fulfillment.dispatched_quantity) === 0 ? '#b45309' : '#15803d', fontWeight: 700 }}>
                         {complaint.warehouse_fulfillment.dispatched_quantity} {complaint.unit_of_measure}
+                        {Number(complaint.warehouse_fulfillment.dispatched_quantity) === 0 && ' (No exchange)'}
                       </span>
                     </div>
                     <div>
                       <strong>Replacement Batch Code:</strong>{' '}
                       <span style={{ fontFamily: 'monospace', fontWeight: 600, background: '#ffffff', padding: '2px 6px', borderRadius: 4, border: '1px solid #dcfce7' }}>
-                        {complaint.warehouse_fulfillment.replacement_batch}
+                        {complaint.warehouse_fulfillment.replacement_batch || 'N/A'}
                       </span>
                     </div>
                     {complaint.warehouse_fulfillment.delivery_notes && (
