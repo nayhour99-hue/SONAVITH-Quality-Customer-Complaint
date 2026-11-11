@@ -403,13 +403,13 @@ def generate_complaints_excel(
                     if sr.get("virtual_returned_quantity")
                     else (sr.get("bin_location", "") or "—")
                 )
-            ) if sr else "—",
+            ) if sr else ("Closed at Stage 4 (0 Exchange)" if (wh and wh.get("dispatched_quantity") == 0) else "—"),
             "", # Stock Return Photo cell in column 37 (AK)
-            sr.get("returned_quantity", "") if sr.get("returned_quantity") is not None else "—",
-            sr.get("disposition_status", "") or "—",
-            sr.get("confirmed_write_off_quantity", "") if sr.get("confirmed_write_off_quantity") is not None else "—",
-            sr.get("confirmed_rework_quantity", "") if sr.get("confirmed_rework_quantity") is not None else "—",
-            sr.get("qa_signed_off", "No") if sr else "Pending",
+            sr.get("returned_quantity", "") if sr.get("returned_quantity") is not None else ("0 (N/A)" if (wh and wh.get("dispatched_quantity") == 0) else "—"),
+            sr.get("disposition_status", "") or ("Closed" if (wh and wh.get("dispatched_quantity") == 0) else "—"),
+            sr.get("confirmed_write_off_quantity", "") if sr.get("confirmed_write_off_quantity") is not None else ("0" if (wh and wh.get("dispatched_quantity") == 0) else "—"),
+            sr.get("confirmed_rework_quantity", "") if sr.get("confirmed_rework_quantity") is not None else ("0" if (wh and wh.get("dispatched_quantity") == 0) else "—"),
+            sr.get("qa_signed_off", "No") if sr else ("N/A (Closed at Stage 4)" if (wh and wh.get("dispatched_quantity") == 0) else "Pending"),
             # Stage 06: Disposal Action (Finance & Tax)
             disp.get("disposal_date", "") or "—",
             disp.get("finance_manager_name", "") or "—",

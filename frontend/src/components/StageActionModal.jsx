@@ -2827,6 +2827,16 @@ export default function StageActionModal({
                 </div>
               )}
 
+              {/* Notice if closed at Stage 4 due to 0 exchange */}
+              {complaint.warehouse_fulfillment && Number(complaint.warehouse_fulfillment.dispatched_quantity) === 0 && !complaint.stock_return && (
+                <div style={{ padding: 12, background: '#fefce8', borderRadius: 8, border: '1px solid #fde047', fontSize: '0.84rem', color: '#854d0e', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <CheckCircle2 size={18} color="#ca8a04" style={{ flexShrink: 0 }} />
+                  <div>
+                    <strong>Closed at Stage 4 (Fulfillment):</strong> Customer kept selling defective products; 0 replacement units dispatched. Case is fully closed with no physical stock return (Stages 5 & 6 bypassed).
+                  </div>
+                </div>
+              )}
+
               {complaint.stock_return && (
                 <div style={{ padding: 14, background: '#fefce8', borderRadius: 8, border: '1px solid #fde047' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, borderBottom: '1px solid #fef08a', paddingBottom: 6 }}>

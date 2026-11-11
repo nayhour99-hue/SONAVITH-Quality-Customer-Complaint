@@ -764,7 +764,20 @@ def update_ceo_decision(complaint_id: str, ceo_data: Dict[str, Any]) -> Optional
 def update_warehouse_fulfillment(complaint_id: str, warehouse_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
-    new_status = "Completed"
+    # If 0 exchange stock to customer as they decided to sell that defective product,
+    # the action is closed directly at Stage 04 fulfillment with no forwarding to Stage 05.
+    dispatched_qty = warehouse_data.get("dispatched_quantity")
+    if dispatched_qty is not None:
+        try:
+            if float(dispatched_qty) == 0:
+                new_status = "Closed"
+            else:
+                new_status = "Completed"
+        except (ValueError, TypeError):
+            new_status = "Completed"
+    else:
+        new_status = "Completed"
+
     cursor.execute("""
     UPDATE complaints
     SET warehouse_fulfillment = ?, status = ?

@@ -192,15 +192,30 @@ export default function App() {
       return item.status === 'Pending approval';
     }
     if (currentTab === 'warehouse') {
-      return item.status === 'Approved' || item.status === 'Completed';
+      return item.status === 'Approved' || item.status === 'Completed' || (item.status === 'Closed' && item.warehouse_fulfillment);
     }
     if (currentTab === 'stock_return') {
-      return item.status === 'Completed' || (item.warehouse_fulfillment && item.status !== 'Rejected');
+      // If 0 exchange stock was dispatched (customer kept selling defective products),
+      // the complaint is closed directly at Stage 4 and NOT forwarded to Stage 5!
+      const whDispQty = item.warehouse_fulfillment?.dispatched_quantity !== undefined && item.warehouse_fulfillment?.dispatched_quantity !== null
+        ? Number(item.warehouse_fulfillment.dispatched_quantity)
+        : null;
+      if (whDispQty === 0 || (item.status === 'Closed' && !item.stock_return)) {
+        return false;
+      }
+      return item.status === 'Completed' || (item.warehouse_fulfillment && item.status !== 'Rejected' && item.status !== 'Closed');
     }
     if (currentTab === 'disposal') {
       // Stage 06 Disposal Action must be forwarded from Stage 05:
-      // Requires completed action in Stage 05 AND QA sign-off ("Yes"), or already Closed
-      const isAlreadyClosed = item.status === 'Closed' || !!item.disposal;
+      // Requires completed action in Stage 05 AND QA sign-off ("Yes"), or already Closed with disposal.
+      // Complaints closed at Stage 4 due to 0 exchange have nothing to dispose of.
+      const whDispQty = item.warehouse_fulfillment?.dispatched_quantity !== undefined && item.warehouse_fulfillment?.dispatched_quantity !== null
+        ? Number(item.warehouse_fulfillment.dispatched_quantity)
+        : null;
+      if (whDispQty === 0 && !item.disposal) {
+        return false;
+      }
+      const isAlreadyClosed = (item.status === 'Closed' && !!item.disposal) || !!item.disposal;
       const isStage05CompleteAndSignedOff = item.stock_return && item.stock_return.qa_signed_off === 'Yes';
       return isStage05CompleteAndSignedOff || isAlreadyClosed;
     }
@@ -310,7 +325,7 @@ export default function App() {
         } else if (currentTab === 'ceo') {
           params.status = 'Pending approval';
         } else if (currentTab === 'warehouse') {
-          params.status = 'Approved,Completed';
+          params.status = 'Approved,Completed,Closed';
         } else if (currentTab === 'stock_return') {
           params.status = 'Completed';
         } else if (currentTab === 'disposal') {
