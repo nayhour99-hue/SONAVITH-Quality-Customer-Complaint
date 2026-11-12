@@ -994,11 +994,14 @@ export default function InsightsView({
         quantity: itemQty,
         status,
         customer: c.customer_name || 'Internal Warehouse',
-        location: sr.bin_location || c.customer_location || 'Warehouse Quarantine',
+        location: (sr.bin_location && sr.bin_location.trim()) || 'Warehouse Quarantine',
         defectType: c.defect_type || 'Defective Stock',
       });
-      if (sr.bin_location) batchesMap[batchKey].productsMap[prodId].locations.add(sr.bin_location);
-      if (c.customer_location) batchesMap[batchKey].productsMap[prodId].locations.add(c.customer_location);
+      // The quarantine location must be the same as the Bin Location of Stock Return (sr.bin_location)
+      // Do not track or append customer location
+      if (sr.bin_location && sr.bin_location.trim()) {
+        batchesMap[batchKey].productsMap[prodId].locations.add(sr.bin_location.trim());
+      }
       batchesMap[batchKey].productsMap[prodId].statuses.add(status);
     });
 
@@ -1489,7 +1492,7 @@ export default function InsightsView({
         const rows = prodItems.map((prod) => {
           const reworkTxt = prod.reworkQty > 0 ? ` <span style="color:#059669;font-size:8px;">(+${prod.reworkQty} rework)</span>` : '';
           const statusList = Array.from(prod.statuses).join(', ');
-          const locList = Array.from(prod.locations).slice(0, 2).join(' / ');
+          const locList = Array.from(prod.locations).join(', ');
           const claimIds = prod.incidents.map(i => i.id).join(', ');
 
           return `
@@ -4791,7 +4794,7 @@ export default function InsightsView({
                       <tbody>
                         {prodList.map((prod) => {
                           const statusList = Array.from(prod.statuses);
-                          const locList = Array.from(prod.locations).slice(0, 2).join(' / ');
+                          const locList = Array.from(prod.locations).join(', ');
                           const claimIds = prod.incidents.map((i) => i.id).join(', ');
 
                           return (
@@ -4883,18 +4886,7 @@ export default function InsightsView({
                                 )}
                               </td>
                               <td style={{ verticalAlign: 'top', padding: '10px 12px', fontSize: '0.76rem', color: '#475569' }}>
-                                {prod.physQty > 0 || prod.virtQty > 0 ? (
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                    {prod.physQty > 0 && (
-                                      <div>🏢 Physical: <strong>{prod.physQty} {prod.uom}</strong> (Room 2 - Cold Bin 04)</div>
-                                    )}
-                                    {prod.virtQty > 0 && (
-                                      <div>🌐 Virtual: <strong>{prod.virtQty} {prod.uom}</strong> (Battambang Branch)</div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <div>📍 {locList || 'Warehouse Quarantine'}</div>
-                                )}
+                                <div>📍 {locList || 'Warehouse Quarantine'}</div>
                               </td>
                               <td style={{ verticalAlign: 'top', textAlign: 'right', padding: '10px 12px' }}>
                                 <div
