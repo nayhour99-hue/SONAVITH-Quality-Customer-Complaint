@@ -2568,9 +2568,12 @@ export default function StageActionModal({
                     onChange={(e) => setDisposalMethod(e.target.value)}
                   >
                     <option value="Physical Destruction / Dump">Physical Destruction / Dump</option>
+                    <option value="Liquid Waste Discharge / Sump Pumping">Liquid Waste Discharge / Sump Pumping</option>
+                    <option value="On-Site Customer Destruction (Video Verified)">On-Site Customer Destruction (Video Verified)</option>
+                    <option value="Authorized Waste Contractor">Authorized Waste Contractor</option>
+                    <option value="Incineration / Certified Destruction">Incineration / Certified Destruction</option>
                     <option value="Drain / Liquid Disposal (Dairy)">Drain / Liquid Disposal (Dairy)</option>
                     <option value="Crushed & Compacted">Crushed & Compacted</option>
-                    <option value="Incineration / Certified Destruction">Incineration / Certified Destruction</option>
                     <option value="Organic Composting / Agricultural Feed">Organic Composting / Agricultural Feed</option>
                   </select>
                 </div>

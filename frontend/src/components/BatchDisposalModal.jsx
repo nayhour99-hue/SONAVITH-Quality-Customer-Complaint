@@ -712,6 +712,7 @@ export default function BatchDisposalModal({
                   style={{ padding: '5px 10px', fontSize: '0.84rem' }}
                 >
                   <option value="Physical Destruction / Dump">Physical Destruction / Dump</option>
+                  <option value="Liquid Waste Discharge / Sump Pumping">Liquid Waste Discharge / Sump Pumping</option>
                   <option value="On-Site Customer Destruction (Video Verified)">On-Site Customer Destruction (Video Verified)</option>
                   <option value="Authorized Waste Contractor">Authorized Waste Contractor</option>
                   <option value="Incineration / Landfill Cut">Incineration / Landfill Cut</option>

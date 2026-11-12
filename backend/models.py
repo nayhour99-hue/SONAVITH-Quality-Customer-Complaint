@@ -157,7 +157,7 @@ class DisposalRequest(BaseModel):
     tax_officer_name: Optional[str] = Field(default="Tax Authority Representative", example="Tax Officer / Customs Dept", description="Tax authority representative or inspection reference")
     tax_count_status: Optional[str] = Field(default="Counted & Approved by Tax Authority", example="Counted & Approved by Tax Authority", description="Status of tax stock count verification")
     disposed_quantity: Optional[float] = Field(default=0.0, ge=0, example=1.0, description="Quantity written off and cut to disposal")
-    disposal_method: Optional[str] = Field(default="Physical Destruction / Dump", example="Physical Destruction / Dump", description="Method of stock disposal")
+    disposal_method: Optional[str] = Field(default="Physical Destruction / Dump", example="Liquid Waste Discharge / Sump Pumping", description="Method of stock disposal")
     write_off_batch_codes: Optional[str] = Field(default="", example="Batch-01 & Batch-02", description="Write off batch code(s) included in this disposal action")
     status: Optional[str] = Field(default="Closed", example="Closed", description="Closed or Open status set by Finance Manager")
     notes: Optional[str] = Field(default="", example="Tax count completed. Written-off stock officially cut to disposal.", description="Disposal and tax minutes notes")
