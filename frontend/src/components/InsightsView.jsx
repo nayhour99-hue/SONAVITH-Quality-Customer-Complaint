@@ -890,8 +890,14 @@ export default function InsightsView({
 
       const status = c.status || 'Pending QA';
 
-      // Categorization
-      const isOpenDisposal = disp.status === 'Open' || (sr.disposition_status === 'Write Off' && !isClosedDisposal && confirmedWo > 0) || (!isClosedDisposal && (physWo > 0 || virtWo > 0));
+      // Categorization:
+      // Stock enters Stage 6 Disposal Action scope only if:
+      // 1) Disposal record already exists with status 'Open', OR
+      // 2) Stage 5 QA sign-off completed (qa_signed_off === 'Yes') for write-off, awaiting Stage 6 ('Pending Disposal')
+      const isStage5SignedOff = sr.qa_signed_off === 'Yes';
+      const isDisposalOpen = disp.status === 'Open';
+      const isPendingDisposal = isStage5SignedOff && !isClosedDisposal && (sr.disposition_status === 'Write Off' || confirmedWo > 0 || physWo > 0 || virtWo > 0);
+      const isOpenDisposal = isDisposalOpen || isPendingDisposal;
       const isStage5Exchanged = (sr.returned_quantity > 0 || status === 'Completed' || status === 'Approved') && !isClosedDisposal;
       const isFacilityQuarantine = c.customer_name === 'SONAVITH Warehouse' && status === 'Pending QA';
 
@@ -943,6 +949,8 @@ export default function InsightsView({
           totalReworkQty: 0,
           complaintsCount: 0,
           hasOpenDisposalAction: false,
+          hasDisposalOpen: false,
+          hasPendingDisposal: false,
           taxCountStatus: disp.tax_count_status || 'Under Tax Review',
           disposalMethod: disp.disposal_method || 'Physical Destruction / Dump',
           taxOfficer: disp.tax_officer_name || 'Kakada',
@@ -951,7 +959,13 @@ export default function InsightsView({
         };
       }
 
-      if (disp.status === 'Open' || isOpenDisposal) {
+      if (isDisposalOpen) {
+        batchesMap[batchKey].hasDisposalOpen = true;
+        batchesMap[batchKey].hasOpenDisposalAction = true;
+      } else if (isPendingDisposal) {
+        batchesMap[batchKey].hasPendingDisposal = true;
+        batchesMap[batchKey].hasOpenDisposalAction = true;
+      } else if (isOpenDisposal) {
         batchesMap[batchKey].hasOpenDisposalAction = true;
       }
 
@@ -965,6 +979,8 @@ export default function InsightsView({
       totalIncidentsCount += 1;
 
       // Group by Product ID within the batch
+      const prodDisposalStatus = isDisposalOpen ? 'Open' : (isPendingDisposal ? 'Pending Disposal' : (disp.status || (isOpenDisposal ? 'Open' : 'Pending QA')));
+
       if (!batchesMap[batchKey].productsMap[prodId]) {
         batchesMap[batchKey].productsMap[prodId] = {
           productId: prodId,
@@ -975,12 +991,14 @@ export default function InsightsView({
           physQty: 0,
           virtQty: 0,
           isOpenDisposalAction: false,
-          disposalStatus: disp.status || (isOpenDisposal ? 'Open' : 'Pending Disposal'),
+          disposalStatus: prodDisposalStatus,
           taxCountStatus: disp.tax_count_status || 'Under Review',
           incidents: [],
           locations: new Set(),
           statuses: new Set(),
         };
+      } else if (isDisposalOpen) {
+        batchesMap[batchKey].productsMap[prodId].disposalStatus = 'Open';
       }
       batchesMap[batchKey].productsMap[prodId].quantity += itemQty;
       batchesMap[batchKey].productsMap[prodId].reworkQty += reworkQty;
@@ -1502,16 +1520,23 @@ export default function InsightsView({
                 <div style="font-size:8px;color:#64748b;margin-top:1px;">Claims: ${esc(claimIds)}</div>
               </td>
               <td>
-                ${prod.isOpenDisposalAction || prod.disposalStatus === 'Open' ? `
+                ${prod.disposalStatus === 'Open' ? `
                   <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:800;background:#fef3c7;color:#92400e;border:1px solid #fde68a;">
                     ⚡ Disposal Action: OPEN
                   </span>
                   <div style="font-size:7.5px;color:#64748b;margin-top:2px;">
                     Tax: ${esc(prod.taxCountStatus || 'Under Review')}
                   </div>
+                ` : prod.disposalStatus === 'Pending Disposal' ? `
+                  <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:800;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;">
+                    ⏳ PENDING DISPOSAL
+                  </span>
+                  <div style="font-size:7.5px;color:#64748b;margin-top:2px;">
+                    Stage 05 QA Signed Off
+                  </div>
                 ` : `
                   <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:700;background:#eff6ff;color:#1e40af;">
-                    ${esc(prod.disposalStatus || 'Pending Disposal')}
+                    ${esc(prod.disposalStatus || 'Pending QA')}
                   </span>
                 `}
               </td>
@@ -1530,12 +1555,19 @@ export default function InsightsView({
                 <span style="font-family:monospace;font-size:10.5px;font-weight:800;background:#0f172a;color:#ffffff;padding:2px 8px;border-radius:4px;">
                   Batch: ${esc(batch.batchKey)}
                 </span>
-                ${batch.hasOpenDisposalAction ? `
+                ${batch.hasDisposalOpen ? `
                   <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:800;background:#fef3c7;color:#92400e;border:1px solid #fde68a;">
                     ⚡ Disposal Action: OPEN (Incomplete Write-Off)
                   </span>
                   <span style="font-size:8.5px;color:#64748b;">
                     Tax Count: <strong>${esc(batch.taxCountStatus)}</strong>
+                  </span>
+                ` : batch.hasPendingDisposal ? `
+                  <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:800;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;">
+                    ⏳ Disposal Action: PENDING DISPOSAL
+                  </span>
+                  <span style="font-size:8.5px;color:#64748b;">
+                    Stage 05 QA Signed Off • Awaiting Stage 06 Disposal
                   </span>
                 ` : `
                   <span style="font-size:8.5px;color:#64748b;">${batch.complaintsCount} incident(s) logged</span>
@@ -2236,9 +2268,9 @@ export default function InsightsView({
     <!-- Summary KPI Cards -->
     <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;margin-bottom:12px;">
       <div style="border:1px solid #fde68a;border-radius:6px;padding:8px 10px;background:#fffaf0;text-align:center;">
-        <div style="font-size:8px;color:#92400e;font-weight:700;text-transform:uppercase;">⚡ Open Disposal Action (Incomplete)</div>
+        <div style="font-size:8px;color:#92400e;font-weight:700;text-transform:uppercase;">⚡ Open Disposal Action</div>
         <div style="font-size:15px;font-weight:900;color:#b45309;margin-top:2px;">${fmt(remainingStockData.openDisposalQty)} <span style="font-size:8.5px;">units</span></div>
-        <div style="font-size:7.5px;color:#92400e;">Disposal action status is Open</div>
+        <div style="font-size:7.5px;color:#92400e;">Disposal Action Pending / Open</div>
       </div>
       <div style="border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px;background:#f0fdf4;text-align:center;">
         <div style="font-size:8px;color:#166534;font-weight:700;text-transform:uppercase;">Stage 4/5 Exchanged / Return</div>
@@ -4666,11 +4698,11 @@ export default function InsightsView({
           }}
         >
           <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px' }}>
-            <div style={{ fontSize: '0.74rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase' }}>⚡ Open Disposal Action (Incomplete)</div>
+            <div style={{ fontSize: '0.74rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase' }}>⚡ Open Disposal Action</div>
             <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#b45309', marginTop: 2 }}>
               {remainingStockData.openDisposalQty.toLocaleString()} <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>units</span>
             </div>
-            <div style={{ fontSize: '0.7rem', color: '#92400e', marginTop: 2 }}>Disposal action status is Open (Batch T-12:00D)</div>
+            <div style={{ fontSize: '0.7rem', color: '#92400e', marginTop: 2 }}>Disposal Action Pending / Open</div>
           </div>
 
           <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 14px' }}>
@@ -4743,7 +4775,7 @@ export default function InsightsView({
                       >
                         Batch: {batch.batchKey}
                       </span>
-                      {batch.hasOpenDisposalAction ? (
+                      {batch.hasDisposalOpen ? (
                         <span
                           style={{
                             fontSize: '0.72rem',
@@ -4757,16 +4789,34 @@ export default function InsightsView({
                         >
                           ⚡ Disposal Action: OPEN (Incomplete Write-Off)
                         </span>
+                      ) : batch.hasPendingDisposal ? (
+                        <span
+                          style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 800,
+                            color: '#1e40af',
+                            background: '#eff6ff',
+                            border: '1px solid #bfdbfe',
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                          }}
+                        >
+                          ⏳ Disposal Action: PENDING DISPOSAL
+                        </span>
                       ) : (
                         <span style={{ fontSize: '0.76rem', color: '#64748b', fontWeight: 600 }}>
                           {batch.complaintsCount} incident(s) logged
                         </span>
                       )}
-                      {batch.hasOpenDisposalAction && (
+                      {batch.hasDisposalOpen ? (
                         <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
                           Tax Count: <strong>{batch.taxCountStatus}</strong>
                         </span>
-                      )}
+                      ) : batch.hasPendingDisposal ? (
+                        <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                          Stage 05 QA Signed Off • Awaiting Stage 06 Disposal
+                        </span>
+                      ) : null}
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -4847,7 +4897,7 @@ export default function InsightsView({
                                 </div>
                               </td>
                               <td style={{ verticalAlign: 'top', padding: '10px 12px' }}>
-                                {prod.isOpenDisposalAction ? (
+                                {prod.disposalStatus === 'Open' ? (
                                   <div>
                                     <span
                                       style={{
@@ -4865,6 +4915,26 @@ export default function InsightsView({
                                     </span>
                                     <div style={{ fontSize: '0.70rem', color: '#64748b', marginTop: 3 }}>
                                       Tax: {prod.taxCountStatus}
+                                    </div>
+                                  </div>
+                                ) : prod.disposalStatus === 'Pending Disposal' ? (
+                                  <div>
+                                    <span
+                                      style={{
+                                        display: 'inline-block',
+                                        fontSize: '0.72rem',
+                                        fontWeight: 800,
+                                        padding: '2px 8px',
+                                        borderRadius: 4,
+                                        background: '#eff6ff',
+                                        color: '#1e40af',
+                                        border: '1px solid #bfdbfe',
+                                      }}
+                                    >
+                                      ⏳ PENDING DISPOSAL
+                                    </span>
+                                    <div style={{ fontSize: '0.70rem', color: '#64748b', marginTop: 3 }}>
+                                      Stage 05 QA Signed Off • Awaiting Stage 06 Disposal
                                     </div>
                                   </div>
                                 ) : (
