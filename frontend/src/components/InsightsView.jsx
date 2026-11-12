@@ -1481,7 +1481,7 @@ export default function InsightsView({
       }).join('');
     };
 
-    // 8. Remaining Stock Not on Write-Off Print HTML Generator
+    // 8. Remaining Stock on Write-Off (Disposal Action Open / Incomplete) Print HTML Generator
     const generateRemainingStockPrintHtml = () => {
       if (!remainingStockData.batches || remainingStockData.batches.length === 0) {
         return '<div style="padding:16px;text-align:center;color:#64748b;font-size:10px;">Zero unwritten defect stock remaining in active inventory.</div>';
@@ -1491,7 +1491,6 @@ export default function InsightsView({
         const prodItems = Object.values(batch.productsMap);
         const rows = prodItems.map((prod) => {
           const reworkTxt = prod.reworkQty > 0 ? ` <span style="color:#059669;font-size:8px;">(+${prod.reworkQty} rework)</span>` : '';
-          const statusList = Array.from(prod.statuses).join(', ');
           const locList = Array.from(prod.locations).join(', ');
           const claimIds = prod.incidents.map(i => i.id).join(', ');
 
@@ -1503,9 +1502,18 @@ export default function InsightsView({
                 <div style="font-size:8px;color:#64748b;margin-top:1px;">Claims: ${esc(claimIds)}</div>
               </td>
               <td>
-                <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:700;background:#fef3c7;color:#92400e;">
-                  ${esc(statusList)}
-                </span>
+                ${prod.isOpenDisposalAction || prod.disposalStatus === 'Open' ? `
+                  <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:800;background:#fef3c7;color:#92400e;border:1px solid #fde68a;">
+                    ⚡ Disposal Action: OPEN
+                  </span>
+                  <div style="font-size:7.5px;color:#64748b;margin-top:2px;">
+                    Tax: ${esc(prod.taxCountStatus || 'Under Review')}
+                  </div>
+                ` : `
+                  <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:700;background:#eff6ff;color:#1e40af;">
+                    ${esc(prod.disposalStatus || 'Pending Disposal')}
+                  </span>
+                `}
               </td>
               <td style="font-size:8.5px;color:#475569;">${esc(locList || 'Warehouse Quarantine')}</td>
               <td style="text-align:right;font-weight:800;color:#b91c1c;font-size:10px;">
@@ -1517,16 +1525,25 @@ export default function InsightsView({
 
         return `
           <div style="border:1px solid #cbd5e1;border-radius:8px;margin-bottom:12px;background:#ffffff;overflow:hidden;">
-            <div style="background:#f8fafc;border-bottom:1px solid #cbd5e1;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">
-              <div style="display:flex;align-items:center;gap:8px;">
+            <div style="background:#f8fafc;border-bottom:1px solid #cbd5e1;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                 <span style="font-family:monospace;font-size:10.5px;font-weight:800;background:#0f172a;color:#ffffff;padding:2px 8px;border-radius:4px;">
                   Batch: ${esc(batch.batchKey)}
                 </span>
-                <span style="font-size:9px;color:#64748b;">${batch.complaintsCount} incident(s)</span>
+                ${batch.hasOpenDisposalAction ? `
+                  <span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:8.5px;font-weight:800;background:#fef3c7;color:#92400e;border:1px solid #fde68a;">
+                    ⚡ Disposal Action: OPEN (Incomplete Write-Off)
+                  </span>
+                  <span style="font-size:8.5px;color:#64748b;">
+                    Tax Count: <strong>${esc(batch.taxCountStatus)}</strong>
+                  </span>
+                ` : `
+                  <span style="font-size:8.5px;color:#64748b;">${batch.complaintsCount} incident(s) logged</span>
+                `}
               </div>
               <div>
                 <span style="font-size:10.5px;font-weight:800;color:#0f172a;">
-                  Batch Unwritten: <strong style="color:#d97706;">${batch.totalQty.toLocaleString()} units</strong>
+                  Open Write-Off: <strong style="color:#d97706;">${batch.totalQty.toLocaleString()} units</strong>
                   ${batch.totalReworkQty > 0 ? `<span style="font-size:9px;color:#059669;margin-left:4px;">(+${batch.totalReworkQty} rework)</span>` : ''}
                 </span>
               </div>
@@ -1536,9 +1553,9 @@ export default function InsightsView({
                 <tr style="background:#f1f5f9;">
                   <th style="width:130px;">Product ID</th>
                   <th>Product Description</th>
-                  <th style="width:120px;">Holding Stage</th>
-                  <th>Quarantine Location</th>
-                  <th style="text-align:right;width:110px;">Remaining QTY</th>
+                  <th style="width:140px;">Disposal Action Status</th>
+                  <th>Holding / Return Location</th>
+                  <th style="text-align:right;width:115px;">Write-Off / Defect QTY</th>
                 </tr>
               </thead>
               <tbody>
@@ -2204,19 +2221,24 @@ export default function InsightsView({
     </div>
   </div>
 
-  <!-- Section 8: Remaining Stock Not on Write-Off Yet (Active Quarantine & Pipeline Inventory) -->
+  <!-- Section 8: Remaining Stock on Write-Off (Disposal Action Open / Incomplete) -->
   <div class="section-card">
     <div class="section-title">
-      <span>8. Remaining Stock Not on Write-Off Yet (Active Quarantine & Pipeline Inventory)</span>
-      <span style="font-size:9.5px;color:#d97706;font-weight:700;">${fmt(remainingStockData.totalRemainingQty)} Units Pending Across ${fmt(remainingStockData.totalBatches)} Batches</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span>8. Remaining Stock on Write-Off (Disposal Action Open / Incomplete)</span>
+        <span style="font-size:8px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fde68a;padding:1px 6px;border-radius:10px;">
+          OPEN DISPOSAL ACTION • INCOMPLETE WRITE-OFF
+        </span>
+      </div>
+      <span style="font-size:9.5px;color:#d97706;font-weight:700;">${fmt(remainingStockData.openDisposalQty || remainingStockData.totalRemainingQty)} Units Pending Across ${fmt(remainingStockData.totalBatches)} Batches</span>
     </div>
 
     <!-- Summary KPI Cards -->
     <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;margin-bottom:12px;">
       <div style="border:1px solid #fde68a;border-radius:6px;padding:8px 10px;background:#fffaf0;text-align:center;">
-        <div style="font-size:8px;color:#92400e;font-weight:700;text-transform:uppercase;">⚡ Open Disposal Action</div>
+        <div style="font-size:8px;color:#92400e;font-weight:700;text-transform:uppercase;">⚡ Open Disposal Action (Incomplete)</div>
         <div style="font-size:15px;font-weight:900;color:#b45309;margin-top:2px;">${fmt(remainingStockData.openDisposalQty)} <span style="font-size:8.5px;">units</span></div>
-        <div style="font-size:7.5px;color:#92400e;">Disposal Action Pending / Open</div>
+        <div style="font-size:7.5px;color:#92400e;">Disposal action status is Open</div>
       </div>
       <div style="border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px;background:#f0fdf4;text-align:center;">
         <div style="font-size:8px;color:#166534;font-weight:700;text-transform:uppercase;">Stage 4/5 Exchanged / Return</div>
