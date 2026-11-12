@@ -133,7 +133,7 @@ def init_db():
             ("DEF-002", "Off smell/taste", "Sour odor, abnormal smell or unpalatable taste deviation", datetime.now().isoformat()),
             ("DEF-003", "Packaging leak", "Fluid seepage around seams, spout or puncture", datetime.now().isoformat()),
             ("DEF-004", "Curdling", "Premature separation, coagulation or lumpiness in liquid milk", datetime.now().isoformat()),
-            ("DEF-005", "Foreign particle", "Extraneous matter or discolored flecks inside product", datetime.now().isoformat()),
+            ("DEF-005", "Foreign object", "Extraneous matter or discolored flecks inside product", datetime.now().isoformat()),
             ("DEF-006", "Short expiry / Out of code", "Delivered close to or past expiration date threshold", datetime.now().isoformat()),
             ("DEF-007", "Temperature abuse / Bloated", "Swollen container due to cold chain interruption", datetime.now().isoformat()),
             ("DEF-008", "Thick Cream", "The concentrated, high-fat portion of milk that rises to the surface before homogenization and appearance is not smooth as normal liquid (Sandy or powdery).", datetime.now().isoformat()),

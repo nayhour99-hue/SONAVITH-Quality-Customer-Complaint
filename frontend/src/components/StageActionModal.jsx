@@ -1377,7 +1377,7 @@ export default function StageActionModal({
                         <option value="Off smell/taste">Off smell/taste</option>
                         <option value="Packaging leak">Packaging leak</option>
                         <option value="Curdling">Curdling</option>
-                        <option value="Foreign particle">Foreign particle</option>
+                        <option value="Foreign object">Foreign object</option>
                       </>
                     )}
                   </select>

@@ -41,6 +41,7 @@ const DEFECT_COLOR_PALETTE = {
   'Off smell/taste': '#d97706',
   'Curdling': '#0284c7',
   'Packaging leak': '#16a34a',
+  'Foreign object': '#8b5cf6',
   'Foreign particle': '#8b5cf6',
   'Out of spec': '#dc2626',
   'Sour taste': '#f97316',
