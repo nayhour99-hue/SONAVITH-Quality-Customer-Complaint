@@ -1345,7 +1345,7 @@ export default function StageActionModal({
                   <input
                     type="number"
                     min="0"
-                    max={complaint.defect_quantity * 2}
+                    step="any"
                     className="form-input"
                     value={confirmedDefectQty}
                     onChange={(e) => setConfirmedDefectQty(e.target.value)}

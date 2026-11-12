@@ -96,7 +96,7 @@ class QAReviewRequest(BaseModel):
     @classmethod
     def validate_qa_temp(cls, v):
         return auto_format_temp(v)
-    confirmed_defect_quantity: Optional[int] = Field(default=None, ge=0, example=7, description="Confirmed defective quantity verified by QA")
+    confirmed_defect_quantity: Optional[float] = Field(default=None, ge=0, example=7, description="Confirmed defective quantity verified by QA")
     confirmed_defect_type: Optional[str] = Field(default="", example="Physical damage", description="Defect type confirmed by QA inspection")
     defect_placement: Optional[str] = Field(default="At Store", example="At Store", description="Placement of defect: At Store or Customer Returned")
     storage_hygiene: Optional[int] = Field(default=5, ge=1, le=5, example=4, description="Storage hygiene rating from 1-5")
